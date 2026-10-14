@@ -204,6 +204,74 @@ jobs:
           print("AMN UI patch applied OK")
           PYEOF
 
+      - name: 5c. Remove Vault tab and finish AMN branding
+        run: |
+          python3 - << 'PYEOF'
+          from pathlib import Path
+          import sys
+
+          def patch(path, old, new, label, count=1):
+              p = Path(path)
+              if not p.exists():
+                  raise SystemExit(f"AMN patch failed: missing {path}")
+              text = p.read_text(encoding="utf-8")
+              actual = text.count(old)
+              if actual < count:
+                  raise SystemExit(f"AMN patch failed: {label} (expected at least {count}, found {actual})")
+              p.write_text(text.replace(old, new, count), encoding="utf-8")
+
+          nav = "shared/src/commonMain/kotlin/dev/cluvex/zedsecure/ui/navigation/NavBar.kt"
+          patch(nav, "TopDestination.entries.forEach { dest ->",
+                "TopDestination.entries.filter { it != TopDestination.Vault }.forEach { dest ->",
+                "hide Vault from navigation", count=4)
+
+          main = "shared/src/commonMain/kotlin/dev/cluvex/zedsecure/ui/MainScaffold.kt"
+          patch(main, "onImported = { current = TopDestination.Vault }",
+                "onImported = { current = TopDestination.Servers }", "route imported configs to Servers")
+          patch(main, "current = if (activeProfile?.isLocked == true) TopDestination.Vault\n                        else TopDestination.Servers",
+                "current = TopDestination.Servers", "remove hidden Vault browse route")
+
+          hero = "shared/src/commonMain/kotlin/dev/cluvex/zedsecure/ui/settings/SettingsHero.kt"
+          old = "\n".join([
+              "        Icon(",
+              "            painterResource(Res.drawable.ic_zed_glyph),",
+              "            contentDescription = null,",
+              "            tint = cs.onPrimary,",
+              "            modifier = Modifier.size(58.dp),",
+              "        )",
+          ])
+          new = "\n".join([
+              "        Text(",
+              '            text = "AMN",',
+              "            color = cs.onPrimary,",
+              "            fontSize = MaterialTheme.typography.titleLarge.fontSize,",
+              "            fontWeight = androidx.compose.ui.text.font.FontWeight.Black,",
+              "            maxLines = 1,",
+              "        )",
+          ])
+          patch(hero, old, new, "replace Settings Z mark with AMN")
+
+          icon = Path("app/src/main/res/drawable/ic_tile_zed.xml")
+          if not icon.exists():
+              raise SystemExit("AMN patch failed: notification icon file missing")
+          icon.write_text("""<vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="24dp" android:height="24dp"
+              android:viewportWidth="24" android:viewportHeight="24">
+              <path android:fillColor="#FFFFFFFF"
+                android:pathData="M12,2.5 L22,21.5 L17.2,21.5 L15.2,17.5 L8.8,17.5 L6.8,21.5 L2,21.5 Z M10.2,13.8 L13.8,13.8 L12,10.2 Z" />
+          </vector>
+          """, encoding="utf-8")
+
+          for base in (Path("shared/src/commonMain/composeResources"), Path("app/src/main/res")):
+              for p in base.glob("values*/strings.xml"):
+                  text = p.read_text(encoding="utf-8")
+                  import re
+                  updated = re.sub(r'>([^<]*?)ZedSecure([^<]*?)<', lambda m: '>' + m.group(1) + 'AMN' + m.group(2) + '<', text, flags=re.IGNORECASE)
+                  if updated != text:
+                      p.write_text(updated, encoding="utf-8")
+          print("AMN branding and Vault navigation patch applied")
+          PYEOF
+
       - name: 6. Generate AMN Logo with Exact Standard Dimensions
         run: |
           sudo apt-get update && sudo apt-get install -y librsvg2-bin python3-pil
