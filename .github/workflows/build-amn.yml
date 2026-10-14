@@ -1,0 +1,189 @@
+name: Build AMN Pro APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-amn:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 1. Checkout ZedSecure v3.1.6 Source
+        uses: actions/checkout@v4
+        with:
+          repository: CluvexStudio/ZedSecure
+          ref: v3.1.6
+
+      - name: 2. Set up JDK 17 & Go (Required for ZedCore)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: 3. Set up Go 1.26.x & Android NDK 28
+        uses: actions/setup-go@v5
+        with:
+          go-version: '>=1.23.0'
+
+      - name: 4. Install NDK 28 & Build VPN Cores
+        run: |
+          yes | sudo $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;28.0.13004108"
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.0.13004108"
+          chmod +x ./tools/*.sh
+          ./tools/fetch-cores.sh
+          if [ -f "./tools/build-zedcore.sh" ]; then
+            ./tools/build-zedcore.sh
+          fi
+
+      - name: 5. Rebrand to AMN (Package, Telegram, Auto-Updater & Colors)
+        env:
+          MY_REPO: ${{ github.repository }}
+        run: |
+          python3 - << 'EOF'
+          import os, re
+
+          my_repo = os.environ.get("MY_REPO", "AMN-Security/AMN")
+
+          # ۱. تغییر شناسه نصب به com.amn.vpn
+          for root, _, files in os.walk("app"):
+              for file in files:
+                  if file in ("build.gradle", "build.gradle.kts"):
+                      path = os.path.join(root, file)
+                      with open(path, "r", encoding="utf-8") as f:
+                          content = f.read()
+                      content = re.sub(
+                          r'applicationId\s*=\s*"com\.zedsecure\.vpn"',
+                          'applicationId = "com.amn.vpn"',
+                          content
+                      )
+                      with open(path, "w", encoding="utf-8") as f:
+                          f.write(content)
+
+          # ۲. اعمال تغییرات نام، پشتیبانی، آپدیت خودکار و رنگ‌بندی
+          target_dirs = ["app/src", "shared"]
+          for base in target_dirs:
+              if not os.path.exists(base):
+                  continue
+              for root, _, files in os.walk(base):
+                  for file in files:
+                      if file.endswith((".xml", ".kt", ".java")):
+                          path = os.path.join(root, file)
+                          try:
+                              with open(path, "r", encoding="utf-8") as f:
+                                  text = f.read()
+                              orig = text
+
+                              # جایگزینی آیدی و لینک تلگرام پشتیبانی با @A_Mourdini_N
+                              text = re.sub(r'https?://t\.me/[a-zA-Z0-9_]+', 'https://t.me/A_Mourdini_N', text)
+                              text = re.sub(r'@CluvexStudio', '@A_Mourdini_N', text, flags=re.IGNORECASE)
+
+                              # اتصال سیستم آپدیت خودکار برنامه به گیت‌هاب خودتان به‌جای ZedSecure
+                              text = text.replace("CluvexStudio/ZedSecure", my_repo)
+
+                              # بهینه‌سازی آدرس تست پینگ
+                              text = text.replace('https://www.gstatic.com/generate_204', 'http://cp.cloudflare.com')
+                              text = text.replace('http://www.gstatic.com/generate_204', 'http://cp.cloudflare.com')
+
+                              # تغییر نام نمایشی به AMN و User-Agent اختصاصی
+                              if file.endswith(".xml"):
+                                  text = text.replace(">ZedSecure<", ">AMN<")
+                                  text = text.replace("ZedSecure", "AMN")
+                              elif file.endswith(".kt"):
+                                  text = text.replace('"ZedSecure"', '"AMN"')
+                                  text = text.replace('ZedSecure/', 'AMN-Client/')
+                                  text = text.replace('CluvexStudio', 'AMN Security')
+
+                              # اعمال تم رنگی فیروزه‌ای نئونی اختصاصی AMN
+                              if file.lower() == "color.kt":
+                                  text = re.sub(r'0xFF[0-9A-Fa-f]{6}', '0xFF00F5D4', text, count=2)
+
+                              if text != orig:
+                                  with open(path, "w", encoding="utf-8") as f:
+                                      f.write(text)
+                          except Exception:
+                              pass
+          print("AMN Rebranding applied successfully!")
+          EOF
+
+      - name: 6. Generate AMN Logo & Replace All Adaptive/PNG Icons
+        run: |
+          sudo apt-get update && sudo apt-get install -y librsvg2-bin
+          cat << 'EOF' > amn_logo.svg
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+            <defs>
+              <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#090D16"/>
+                <stop offset="100%" stop-color="#131B2E"/>
+                            </linearGradient>
+              <linearGradient id="sh" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#00F5D4"/>
+                <stop offset="100%" stop-color="#2563EB"/>
+              </linearGradient>
+            </defs>
+            <rect width="512" height="512" rx="115" fill="url(#bg)"/>
+            <path d="M256 76 L406 140 V256 C406 355 340 425 256 456 C172 425 106 355 106 256 V140 Z" fill="#131B2E" stroke="url(#sh)" stroke-width="24" stroke-linejoin="round"/>
+            <text x="256" y="292" font-family="sans-serif" font-size="100" font-weight="900" fill="#FFFFFF" text-anchor="middle">AMN</text>
+            <rect x="186" y="322" width="140" height="10" rx="5" fill="url(#sh)"/>
+          </svg>
+          EOF
+
+          # حذف آیکون برداری قبلی برای نمایش صحیح لوگوی AMN در اندرویدهای جدید
+          rm -rf app/src/main/res/mipmap-anydpi*
+
+          # جایگزینی تمام آیکون‌های برنامه
+          find app/src/main/res -name "ic_launcher*.webp" -o -name "ic_launcher*.png" | while read icon; do
+            rsvg-convert -w 512 -h 512 amn_logo.svg -o "$icon"
+          done
+
+      - name: 7. Build Release APKs
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleRelease
+
+      - name: 8. Custom Security Signing (AMN Exclusive Keystore)
+        run: |
+          keytool -genkeypair -v \
+            -keystore amn-release.jks \
+            -alias amn_key \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -storepass AMNSecure2026! \
+            -keypass AMNSecure2026! \
+            -dname "CN=AMN, OU=Security, O=AMN, L=Tehran, S=Tehran, C=IR"
+
+          mkdir -p output_apks
+          ANDROID_BUILD_TOOLS=$(ls -d$ANDROID_HOME/build-tools/* | tail -n 1)
+
+          for apk in $(find app/build/outputs/apk/release -name "*.apk"); do
+            base_name=$(basename "$apk" | sed 's/ZedSecure/AMN/g' | sed 's/app-/AMN-/g')
+            "$ANDROID_BUILD_TOOLS/zipalign" -v -p 4 "$apk" "aligned-$base_name"
+            "$ANDROID_BUILD_TOOLS/apksigner" sign \
+              --ks amn-release.jks \
+              --ks-key-alias amn_key \
+              --ks-pass pass:AMNSecure2026! \
+              --key-pass pass:AMNSecure2026! \
+              --out "output_apks/AMN-$base_name" \
+              "aligned-$base_name"
+          done
+
+          cp amn-release.jks output_apks/
+
+      - name: 9. Upload APKs + Keystore to Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: AMN-v3.1.6-Bundle
+          path: output_apks/*
+
+      - name: 10. Publish APKs to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: AMN-v3.1.6
+          name: "AMN Security v3.1.6"
+          body: |
+            ### نسخه اختصاصی AMN آماده دانلود است
+            - **پشتیبانی تلگرام:** [@A_Mourdini_N](https://t.me/A_Mourdini_N)
+            - **نسخه پیشنهادی برای اکثر گوشی‌ها:** `arm64-v8a` یا `universal`
+          files: output_apks/*.apk
