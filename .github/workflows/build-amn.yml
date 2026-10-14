@@ -32,6 +32,7 @@ jobs:
           DEFAULT_NDK=$(ls -d$ANDROID_HOME/ndk/* 2>/dev/null | sort -V | tail -n 1)
           if [ -n "$DEFAULT_NDK" ]; then
             export ANDROID_NDK_HOME="$DEFAULT_NDK"
+            export NDK_HOME="$DEFAULT_NDK"
             echo "ANDROID_NDK_HOME=$DEFAULT_NDK" >> $GITHUB_ENV
           fi
 
@@ -46,7 +47,7 @@ jobs:
             ./tools/build-zedcore.sh || true
           fi
 
-      - name: 5. Safe Rebrand to AMN (Without Breaking Themes or Classes)
+      - name: 5. Safe Rebrand to AMN (Package ID + UI Strings Only)
         env:
           MY_REPO: ${{ github.repository }}
         run: |
@@ -55,7 +56,31 @@ jobs:
 
           my_repo = os.environ.get("MY_REPO", "alimnmb/AMN")
 
-          # ۱. تغییر فقط متن داخل تگ‌های <string> در فایل‌های strings.xml (بدون خراب شدن Theme.ZedSecure)
+          # ۱. تغییر شناسه نصب به com.amn.vpn (برای نصب در کنار ZedSecure بدون تداخل)
+          for root, _, files in os.walk("app"):
+              for file in files:
+                  if file in ("build.gradle", "build.gradle.kts"):
+                      path = os.path.join(root, file)
+                      with open(path, "r", encoding="utf-8") as f:
+                          content = f.read()
+                      content = re.sub(
+                          r'applicationId\s*=\s*"com\.zedsecure\.vpn"',
+                          'applicationId = "com.amn.vpn"',
+                          content
+                      )
+                      with open(path, "w", encoding="utf-8") as f:
+                          f.write(content)
+
+          # ۲. جداسازی Authorities در مانیفست بدون دست زدن به نام کلاس‌های اجرایی یا Theme
+          manifest_path = "app/src/main/AndroidManifest.xml"
+          if os.path.exists(manifest_path):
+              with open(manifest_path, "r", encoding="utf-8") as f:
+                  m_text = f.read()
+              m_text = m_text.replace('android:authorities="com.zedsecure.vpn', 'android:authorities="com.amn.vpn')
+              with open(manifest_path, "w", encoding="utf-8") as f:
+                  f.write(m_text)
+
+          # ۳. تغییر فقط متن داخل تگ‌ها در strings.xml (بدون خراب شدن استایل‌ها)
           for root, _, files in os.walk("app/src/main/res"):
               for file in files:
                   if file == "strings.xml":
@@ -64,8 +89,6 @@ jobs:
                           with open(path, "r", encoding="utf-8") as f:
                               text = f.read()
                           orig = text
-
-                          # فقط متن بین > و < را تغییر بده، نه نام متغیرها و استایل‌ها
                           text = re.sub(
                               r'>([^<]*?)ZedSecure([^<]*?)<',
                               lambda m: f'>{m.group(1)}AMN{m.group(2)}<',
@@ -73,14 +96,13 @@ jobs:
                           )
                           text = re.sub(r'https?://t\.me/[a-zA-Z0-9_]+', 'https://t.me/A_Mourdini_N', text)
                           text = re.sub(r'@CluvexStudio', '@A_Mourdini_N', text, flags=re.IGNORECASE)
-
                           if text != orig:
                               with open(path, "w", encoding="utf-8") as f:
                                   f.write(text)
                       except Exception:
                           pass
 
-          # ۲. تغییر نام نمایشی و لینک تلگرام در فایل‌های Kotlin رابط کاربری
+          # ۴. تغییر نام نمایشی و لینک تلگرام در فایل‌های Kotlin
           for root, _, files in os.walk("app/src/main"):
               for file in files:
                   if file.endswith(".kt"):
@@ -89,29 +111,24 @@ jobs:
                           with open(path, "r", encoding="utf-8") as f:
                               text = f.read()
                           orig = text
-
                           text = re.sub(r'https?://t\.me/[a-zA-Z0-9_]+', 'https://t.me/A_Mourdini_N', text)
                           text = re.sub(r'@CluvexStudio', '@A_Mourdini_N', text, flags=re.IGNORECASE)
                           text = text.replace('"ZedSecure"', '"AMN"')
                           text = text.replace('"ZedSecure VPN"', '"AMN VPN"')
                           text = text.replace("CluvexStudio/ZedSecure", my_repo)
                           text = text.replace('https://www.gstatic.com/generate_204', 'http://cp.cloudflare.com')
-
                           if file.lower() == "color.kt":
                               text = re.sub(r'0xFF[0-9A-Fa-f]{6}', '0xFF00F5D4', text, count=2)
-
                           if text != orig:
                               with open(path, "w", encoding="utf-8") as f:
                                   f.write(text)
                       except Exception:
                           pass
-
-          print("Safe Rebranding completed successfully!")
           EOF
 
-      - name: 6. Generate AMN Logo (Proper PNG & WEBP Formats)
+      - name: 6. Generate AMN Logo with Exact Standard Dimensions
         run: |
-          sudo apt-get update && sudo apt-get install -y librsvg2-bin webp
+          sudo apt-get update && sudo apt-get install -y librsvg2-bin python3-pil
           cat << 'EOF' > amn_logo.svg
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
             <defs>
@@ -134,13 +151,24 @@ jobs:
           rsvg-convert -w 512 -h 512 amn_logo.svg -o amn_logo.png
           rm -rf app/src/main/res/mipmap-anydpi*
 
-          # تبدیل استاندارد فایل‌های PNG و WEBP بدون خراب شدن هدر تصویر
-          find app/src/main/res -name "ic_launcher*.png" | while read icon; do
-            cp amn_logo.png "$icon"
-          done
-          find app/src/main/res -name "ic_launcher*.webp" | while read icon; do
-            cwebp -q 95 amn_logo.png -o "$icon"
-          done
+          python3 - << 'EOF'
+          import os
+          from PIL import Image
+
+          master = Image.open("amn_logo.png").convert("RGBA")
+          for root, _, files in os.walk("app/src/main/res"):
+              for file in files:
+                  if file.startswith("ic_launcher") and file.endswith((".png", ".webp")):
+                      path = os.path.join(root, file)
+                      try:
+                          with Image.open(path) as img:
+                              size = img.size
+                              fmt = img.format or ("WEBP" if file.endswith(".webp") else "PNG")
+                          resized = master.resize(size, Image.Resampling.LANCZOS)
+                          resized.save(path, format=fmt)
+                      except Exception:
+                          pass
+          EOF
 
       - name: 7. Build Release APKs with Retry
         run: |
@@ -152,10 +180,8 @@ jobs:
             }
           done
 
-      - name: 8. Sign APKs with AMN Exclusive Keystore
+      - name: 8. Sign APKs with Official Android SDK Build-Tools
         run: |
-          sudo apt-get update && sudo apt-get install -y zipalign apksigner
-
           keytool -genkeypair -v \
             -keystore amn-release.jks \
             -alias amn_key \
@@ -167,16 +193,20 @@ jobs:
             -dname "CN=AMN, OU=Security, O=AMN, L=Tehran, S=Tehran, C=IR"
 
           mkdir -p output_apks
+          ZIPALIGN=$(find "$ANDROID_HOME/build-tools" -name "zipalign" | sort -V | tail -n 1)
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name "apksigner" | sort -V | tail -n 1)
 
           for apk in $(find app/build/outputs/apk/release -name "*.apk"); do
-            base_name=$(basename "$apk" | sed 's/ZedSecure/AMN/g' | sed 's/app-/AMN-/g')
-            rm -f "aligned-$base_name"
-            zipalign -f -p 4 "$apk" "aligned-$base_name"
-            apksigner sign \
+            base_name=$(basename "$apk" | sed 's/-unsigned//g' | sed 's/ZedSecure/AMN/g' | sed 's/app-/AMN-/g')
+            "$ZIPALIGN" -f -p 4 "$apk" "aligned-$base_name"
+            "$APKSIGNER" sign \
               --ks amn-release.jks \
               --ks-key-alias amn_key \
               --ks-pass pass:AMNSecure2026! \
               --key-pass pass:AMNSecure2026! \
+              --v1-signing-enabled true \
+              --v2-signing-enabled true \
+              --v3-signing-enabled true \
               --out "output_apks/AMN-$base_name" \
               "aligned-$base_name"
           done
@@ -184,10 +214,10 @@ jobs:
       - name: 9. Publish APKs to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: AMN-v3.1.6-Final
-          name: "AMN Security v3.1.6 (Fixed & Ready)"
+          tag_name: AMN-v3.1.6-Working
+          name: "AMN Security v3.1.6 (Ready)"
           body: |
-            ### نسخه نهایی و تست‌شده AMN
+            ### نسخه نهایی AMN (قابل نصب در کنار ZedSecure و بدون کرش)
             - **پشتیبانی تلگرام:** [@A_Mourdini_N](https://t.me/A_Mourdini_N)
             - **نسخه پیشنهادی:** `arm64-v8a`
           files: output_apks/*.apk
