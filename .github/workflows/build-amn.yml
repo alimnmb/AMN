@@ -126,6 +126,84 @@ jobs:
                           pass
           EOF
 
+      - name: 5b. AMN UI Changes (Home title, Settings About, Support)
+        run: |
+          python3 - << 'PYEOF'
+          import re, sys, glob
+
+          def fail(msg):
+              print("AMN PATCH FAILED: " + msg)
+              sys.exit(1)
+
+          def read(p):
+              with open(p, "r", encoding="utf-8") as f:
+                  return f.read()
+
+          def write(p, t):
+              with open(p, "w", encoding="utf-8") as f:
+                  f.write(t)
+
+          KT = "shared/src/commonMain/kotlin/dev/cluvex/zedsecure/ui"
+
+          # 1) Home title: app_name -> AMN (shared Compose resources used by the Home screen)
+          n = 0
+          for p in glob.glob("shared/src/commonMain/composeResources/values*/strings.xml"):
+              t = read(p)
+              new = re.sub(r'(<string name="app_name">)[^<]*(</string>)', r'\1AMN\2', t)
+              if new != t:
+                  write(p, new)
+                  n += 1
+          if n == 0:
+              fail("app_name not found in shared strings.xml")
+
+          # 2) Settings screen
+          p = KT + "/settings/SettingsScreen.kt"
+          t = read(p)
+
+          # 2a) remove the "Support the project" banner group
+          pat = re.compile(
+              r'\n[ ]*SettingsGroup\(modifier = Modifier\.tourTargetInPage\(TourTargets\.SETTINGS_SUPPORT\)\) \{\n'
+              r'[ ]*SettingsBannerRow\(\n.*?\) \{ onOpen\(SettingsPage\.Support\) \}\n'
+              r'[ ]*\}\n', re.S)
+          t, c = pat.subn('\n', t, count=1)
+          if c != 1:
+              fail("support banner block not found")
+
+          # 2b) About group: keep only the version row, then add Created By + Support rows
+          start = t.index('stringResource(Res.string.settings_about),\n            modifier = Modifier.tourTargetInPage(TourTargets.SETTINGS_ABOUT),')
+          gstart = t.index('{', start)
+          body_start = t.index('val fromPlay', gstart)
+          ver_row = t.index('SettingsMenuRow(\n                stringResource(Res.string.settings_about),\n                AppInfo.versionName,', body_start)
+          ver_end = t.index('{ onAbout() }', ver_row) + len('{ onAbout() }')
+          new_rows = '''SettingsMenuRow(
+                          stringResource(Res.string.settings_about),
+                          AppInfo.versionName,
+                          art = SettingsArts.About,
+                      ) { onAbout() }
+                      SettingsMenuRow(
+                          "Created By Ali Mourdini",
+                          art = SettingsArts.About,
+                      ) { }
+                      SettingsMenuRow(
+                          "Support",
+                          "@A_Mourdini_N",
+                          art = SettingsArts.Support,
+                      ) { platform.openUri("https://t.me/A_Mourdini_N") }'''
+          t = t[:body_start] + new_rows + t[ver_end:]
+          write(p, t)
+
+          # 3) Drop the tour step that pointed at the removed banner
+          p = KT + "/onboarding/TourSteps.kt"
+          t = read(p)
+          pat = re.compile(
+              r'\n[ ]*TourStep\(\n[ ]*target = TourTargets\.SETTINGS_SUPPORT,\n.*?\n[ ]*\),\n', re.S)
+          t, c = pat.subn('\n', t, count=1)
+          if c != 1:
+              fail("tour support step not found")
+          write(p, t)
+          print("AMN UI patch applied OK")
+          PYEOF
+
       - name: 6. Generate AMN Logo with Exact Standard Dimensions
         run: |
           sudo apt-get update && sudo apt-get install -y librsvg2-bin python3-pil
