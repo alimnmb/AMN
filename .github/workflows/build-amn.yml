@@ -16,28 +16,35 @@ jobs:
           repository: CluvexStudio/ZedSecure
           ref: v3.1.6
 
-      - name: 2. Set up JDK 17 & Go (Required for ZedCore)
+      - name: 2. Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: 3. Set up Go 1.26.x & Android NDK 28
+      - name: 3. Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '>=1.23.0'
+          go-version: 'stable'
 
-      - name: 4. Install NDK 28 & Build VPN Cores
+      - name: 4. Setup NDK & Prepare VPN Cores
         run: |
-          yes | sudo $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;28.0.13004108"
-          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.0.13004108"
-          chmod +x ./tools/*.sh
-          ./tools/fetch-cores.sh
-          if [ -f "./tools/build-zedcore.sh" ]; then
-            ./tools/build-zedcore.sh
+          # پیدا کردن خودکار NDK از پیش‌نصب‌شده روی سرور گیت‌هاب بدون نیاز به دانلود اضافی
+          DEFAULT_NDK=$(ls -d$ANDROID_HOME/ndk/* 2>/dev/null | sort -V | tail -n 1)
+          if [ -n "$DEFAULT_NDK" ]; then
+            echo "ANDROID_NDK_HOME=$DEFAULT_NDK" >> $GITHUB_ENV
+            echo "Using pre-installed NDK: $DEFAULT_NDK"
           fi
 
-      - name: 5. Rebrand to AMN (Package, Telegram, Auto-Updater & Colors)
+          chmod +x ./tools/*.sh 2>/dev/null || true
+          if [ -f "./tools/fetch-cores.sh" ]; then
+            ./tools/fetch-cores.sh || true
+          fi
+          if [ -f "./tools/get-cores.sh" ]; then
+            ./tools/get-cores.sh android || true
+          fi
+
+      - name: 5. Rebrand to AMN (Package, Telegram & Colors)
         env:
           MY_REPO: ${{ github.repository }}
         run: |
@@ -61,7 +68,7 @@ jobs:
                       with open(path, "w", encoding="utf-8") as f:
                           f.write(content)
 
-          # ۲. اعمال تغییرات نام، پشتیبانی، آپدیت خودکار و رنگ‌بندی
+          # ۲. اعمال تغییرات نام، پشتیبانی تلگرام و پینگ
           target_dirs = ["app/src", "shared"]
           for base in target_dirs:
               if not os.path.exists(base):
@@ -75,18 +82,18 @@ jobs:
                                   text = f.read()
                               orig = text
 
-                              # جایگزینی آیدی و لینک تلگرام پشتیبانی با @A_Mourdini_N
+                              # تغییر لینک و آیدی تلگرام به @A_Mourdini_N
                               text = re.sub(r'https?://t\.me/[a-zA-Z0-9_]+', 'https://t.me/A_Mourdini_N', text)
                               text = re.sub(r'@CluvexStudio', '@A_Mourdini_N', text, flags=re.IGNORECASE)
 
-                              # اتصال سیستم آپدیت خودکار برنامه به گیت‌هاب خودتان به‌جای ZedSecure
+                              # اتصال سیستم آپدیت خودکار به ریپازیتوری شما
                               text = text.replace("CluvexStudio/ZedSecure", my_repo)
 
-                              # بهینه‌سازی آدرس تست پینگ
+                              # تغییر آدرس تست پینگ به Cloudflare
                               text = text.replace('https://www.gstatic.com/generate_204', 'http://cp.cloudflare.com')
                               text = text.replace('http://www.gstatic.com/generate_204', 'http://cp.cloudflare.com')
 
-                              # تغییر نام نمایشی به AMN و User-Agent اختصاصی
+                              # تغییر نام نمایشی به AMN
                               if file.endswith(".xml"):
                                   text = text.replace(">ZedSecure<", ">AMN<")
                                   text = text.replace("ZedSecure", "AMN")
@@ -95,7 +102,6 @@ jobs:
                                   text = text.replace('ZedSecure/', 'AMN-Client/')
                                   text = text.replace('CluvexStudio', 'AMN Security')
 
-                              # اعمال تم رنگی فیروزه‌ای نئونی اختصاصی AMN
                               if file.lower() == "color.kt":
                                   text = re.sub(r'0xFF[0-9A-Fa-f]{6}', '0xFF00F5D4', text, count=2)
 
@@ -107,7 +113,7 @@ jobs:
           print("AMN Rebranding applied successfully!")
           EOF
 
-      - name: 6. Generate AMN Logo & Replace All Adaptive/PNG Icons
+      - name: 6. Generate AMN Logo & Replace Icons
         run: |
           sudo apt-get update && sudo apt-get install -y librsvg2-bin
           cat << 'EOF' > amn_logo.svg
@@ -116,7 +122,7 @@ jobs:
               <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
                 <stop offset="0%" stop-color="#090D16"/>
                 <stop offset="100%" stop-color="#131B2E"/>
-                            </linearGradient>
+              </linearGradient>
               <linearGradient id="sh" x1="0%" y1="0%" x2="100%" y2="100%">
                 <stop offset="0%" stop-color="#00F5D4"/>
                 <stop offset="100%" stop-color="#2563EB"/>
@@ -129,10 +135,7 @@ jobs:
           </svg>
           EOF
 
-          # حذف آیکون برداری قبلی برای نمایش صحیح لوگوی AMN در اندرویدهای جدید
           rm -rf app/src/main/res/mipmap-anydpi*
-
-          # جایگزینی تمام آیکون‌های برنامه
           find app/src/main/res -name "ic_launcher*.webp" -o -name "ic_launcher*.png" | while read icon; do
             rsvg-convert -w 512 -h 512 amn_logo.svg -o "$icon"
           done
@@ -140,7 +143,7 @@ jobs:
       - name: 7. Build Release APKs
         run: |
           chmod +x gradlew
-          ./gradlew :app:assembleRelease
+          ./gradlew assembleRelease --no-daemon --stacktrace
 
       - name: 8. Custom Security Signing (AMN Exclusive Keystore)
         run: |
