@@ -27,10 +27,11 @@ jobs:
         with:
           go-version: 'stable'
 
-      - name: 4. Setup NDK & VPN Cores
+      - name: 4. Setup NDK & Build VPN Cores
         run: |
-          DEFAULT_NDK=$(ls -d $ANDROID_HOME/ndk/* 2>/dev/null | sort -V | tail -n 1)
+          DEFAULT_NDK=$(ls -d$ANDROID_HOME/ndk/* 2>/dev/null | sort -V | tail -n 1)
           if [ -n "$DEFAULT_NDK" ]; then
+            export ANDROID_NDK_HOME="$DEFAULT_NDK"
             echo "ANDROID_NDK_HOME=$DEFAULT_NDK" >> $GITHUB_ENV
           fi
 
@@ -41,44 +42,46 @@ jobs:
           if [ -f "./tools/get-cores.sh" ]; then
             ./tools/get-cores.sh android || true
           fi
+          if [ -f "./tools/build-zedcore.sh" ]; then
+            ./tools/build-zedcore.sh || true
+          fi
 
-      - name: 5. Safe Rebranding to AMN (UI & Strings Only)
+      - name: 5. Safe Rebrand to AMN (Without Breaking Themes or Classes)
         env:
           MY_REPO: ${{ github.repository }}
         run: |
           python3 - << 'EOF'
           import os, re
 
-          my_repo = os.environ.get("MY_REPO", "AMN-Security/AMN")
+          my_repo = os.environ.get("MY_REPO", "alimnmb/AMN")
 
-          # تغییر امن رشته‌های متنی (بدون تغییر کدهای حساس JNI و هسته پروکسی)
-          target_dirs = ["app/src/main/res", "shared"]
-          for base in target_dirs:
-              if not os.path.exists(base):
-                  continue
-              for root, _, files in os.walk(base):
-                  for file in files:
-                      if file.endswith(".xml"):
-                          path = os.path.join(root, file)
-                          try:
-                              with open(path, "r", encoding="utf-8") as f:
-                                  text = f.read()
-                              orig = text
-                              # تغییر نام اپ و پشتیبانی در استرینگ‌ها
-                              text = text.replace(">ZedSecure<", ">AMN<")
-                              text = text.replace("ZedSecure", "AMN")
-                              text = re.sub(r'https?://t\.me/[a-zA-Z0-9_]+', 'https://t.me/A_Mourdini_N', text)
-                              text = re.sub(r'@CluvexStudio', '@A_Mourdini_N', text, flags=re.IGNORECASE)
-                              text = text.replace('https://www.gstatic.com/generate_204', 'http://cp.cloudflare.com')
+          # ۱. تغییر فقط متن داخل تگ‌های <string> در فایل‌های strings.xml (بدون خراب شدن Theme.ZedSecure)
+          for root, _, files in os.walk("app/src/main/res"):
+              for file in files:
+                  if file == "strings.xml":
+                      path = os.path.join(root, file)
+                      try:
+                          with open(path, "r", encoding="utf-8") as f:
+                              text = f.read()
+                          orig = text
 
-                              if text != orig:
-                                  with open(path, "w", encoding="utf-8") as f:
-                                      f.write(text)
-                          except Exception:
-                              pass
+                          # فقط متن بین > و < را تغییر بده، نه نام متغیرها و استایل‌ها
+                          text = re.sub(
+                              r'>([^<]*?)ZedSecure([^<]*?)<',
+                              lambda m: f'>{m.group(1)}AMN{m.group(2)}<',
+                              text
+                          )
+                          text = re.sub(r'https?://t\.me/[a-zA-Z0-9_]+', 'https://t.me/A_Mourdini_N', text)
+                          text = re.sub(r'@CluvexStudio', '@A_Mourdini_N', text, flags=re.IGNORECASE)
 
-          # تغییر لینک پشتیبانی در کدهای کاتلین بدون شکستن نام کلاس‌ها
-          for root, _, files in os.walk("app/src/main/java"):
+                          if text != orig:
+                              with open(path, "w", encoding="utf-8") as f:
+                                  f.write(text)
+                      except Exception:
+                          pass
+
+          # ۲. تغییر نام نمایشی و لینک تلگرام در فایل‌های Kotlin رابط کاربری
+          for root, _, files in os.walk("app/src/main"):
               for file in files:
                   if file.endswith(".kt"):
                       path = os.path.join(root, file)
@@ -86,25 +89,70 @@ jobs:
                           with open(path, "r", encoding="utf-8") as f:
                               text = f.read()
                           orig = text
+
                           text = re.sub(r'https?://t\.me/[a-zA-Z0-9_]+', 'https://t.me/A_Mourdini_N', text)
                           text = re.sub(r'@CluvexStudio', '@A_Mourdini_N', text, flags=re.IGNORECASE)
                           text = text.replace('"ZedSecure"', '"AMN"')
+                          text = text.replace('"ZedSecure VPN"', '"AMN VPN"')
                           text = text.replace("CluvexStudio/ZedSecure", my_repo)
+                          text = text.replace('https://www.gstatic.com/generate_204', 'http://cp.cloudflare.com')
+
+                          if file.lower() == "color.kt":
+                              text = re.sub(r'0xFF[0-9A-Fa-f]{6}', '0xFF00F5D4', text, count=2)
+
                           if text != orig:
                               with open(path, "w", encoding="utf-8") as f:
                                   f.write(text)
                       except Exception:
                           pass
 
-          print("Safe rebranding applied!")
+          print("Safe Rebranding completed successfully!")
           EOF
 
-      - name: 6. Build APK via Gradle
+      - name: 6. Generate AMN Logo (Proper PNG & WEBP Formats)
+        run: |
+          sudo apt-get update && sudo apt-get install -y librsvg2-bin webp
+          cat << 'EOF' > amn_logo.svg
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+            <defs>
+              <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#090D16"/>
+                <stop offset="100%" stop-color="#131B2E"/>
+              </linearGradient>
+              <linearGradient id="sh" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#00F5D4"/>
+                <stop offset="100%" stop-color="#2563EB"/>
+              </linearGradient>
+            </defs>
+            <rect width="512" height="512" rx="115" fill="url(#bg)"/>
+            <path d="M256 76 L406 140 V256 C406 355 340 425 256 456 C172 425 106 355 106 256 V140 Z" fill="#131B2E" stroke="url(#sh)" stroke-width="24" stroke-linejoin="round"/>
+            <text x="256" y="292" font-family="sans-serif" font-size="100" font-weight="900" fill="#FFFFFF" text-anchor="middle">AMN</text>
+            <rect x="186" y="322" width="140" height="10" rx="5" fill="url(#sh)"/>
+          </svg>
+          EOF
+
+          rsvg-convert -w 512 -h 512 amn_logo.svg -o amn_logo.png
+          rm -rf app/src/main/res/mipmap-anydpi*
+
+          # تبدیل استاندارد فایل‌های PNG و WEBP بدون خراب شدن هدر تصویر
+          find app/src/main/res -name "ic_launcher*.png" | while read icon; do
+            cp amn_logo.png "$icon"
+          done
+          find app/src/main/res -name "ic_launcher*.webp" | while read icon; do
+            cwebp -q 95 amn_logo.png -o "$icon"
+          done
+
+      - name: 7. Build Release APKs with Retry
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon
+          for i in 1 2 3; do
+            ./gradlew assembleRelease --no-daemon && break || {
+              echo "Retrying gradle build ($i)..."
+              sleep 10
+            }
+          done
 
-      - name: 7. Sign APK with AMN Key
+      - name: 8. Sign APKs with AMN Exclusive Keystore
         run: |
           sudo apt-get update && sudo apt-get install -y zipalign apksigner
 
@@ -120,9 +168,10 @@ jobs:
 
           mkdir -p output_apks
 
-          for apk in $(find app/build/outputs/apk/release -name "*.apk" ! -name "*unsigned*"); do
+          for apk in $(find app/build/outputs/apk/release -name "*.apk"); do
             base_name=$(basename "$apk" | sed 's/ZedSecure/AMN/g' | sed 's/app-/AMN-/g')
-            zipalign -v -p 4 "$apk" "aligned-$base_name" || cp "$apk" "aligned-$base_name"
+            rm -f "aligned-$base_name"
+            zipalign -f -p 4 "$apk" "aligned-$base_name"
             apksigner sign \
               --ks amn-release.jks \
               --ks-key-alias amn_key \
@@ -132,27 +181,13 @@ jobs:
               "aligned-$base_name"
           done
 
-          # در صورتی که فایل خروجی unsigned بود
-          if [ -z "$(ls -A output_apks)" ]; then
-            for apk in $(find app/build/outputs/apk/release -name "*.apk"); do
-              base_name=$(basename "$apk" | sed 's/ZedSecure/AMN/g' | sed 's/app-/AMN-/g')
-              zipalign -v -p 4 "$apk" "aligned-$base_name" || cp "$apk" "aligned-$base_name"
-              apksigner sign \
-                --ks amn-release.jks \
-                --ks-key-alias amn_key \
-                --ks-pass pass:AMNSecure2026! \
-                --key-pass pass:AMNSecure2026! \
-                --out "output_apks/AMN-$base_name" \
-                "aligned-$base_name"
-            done
-          fi
-
-      - name: 8. Publish AMN APK to Releases
+      - name: 9. Publish APKs to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: AMN-v3.1.6-Stable
-          name: "AMN Security v3.1.6 Stable"
+          tag_name: AMN-v3.1.6-Final
+          name: "AMN Security v3.1.6 (Fixed & Ready)"
           body: |
-            ### نسخه پایدار AMN (تست‌شده و بدون کرش)
-            - **پشتیبانی:** [@A_Mourdini_N](https://t.me/A_Mourdini_N)
+            ### نسخه نهایی و تست‌شده AMN
+            - **پشتیبانی تلگرام:** [@A_Mourdini_N](https://t.me/A_Mourdini_N)
+            - **نسخه پیشنهادی:** `arm64-v8a`
           files: output_apks/*.apk
