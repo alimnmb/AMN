@@ -29,11 +29,9 @@ jobs:
 
       - name: 4. Setup NDK & Prepare VPN Cores
         run: |
-          # پیدا کردن خودکار NDK از پیش‌نصب‌شده روی سرور گیت‌هاب بدون نیاز به دانلود اضافی
-          DEFAULT_NDK=$(ls -d$ANDROID_HOME/ndk/* 2>/dev/null | sort -V | tail -n 1)
+          DEFAULT_NDK=$(ls -d $ANDROID_HOME/ndk/* 2>/dev/null | sort -V | tail -n 1)
           if [ -n "$DEFAULT_NDK" ]; then
             echo "ANDROID_NDK_HOME=$DEFAULT_NDK" >> $GITHUB_ENV
-            echo "Using pre-installed NDK: $DEFAULT_NDK"
           fi
 
           chmod +x ./tools/*.sh 2>/dev/null || true
@@ -53,7 +51,6 @@ jobs:
 
           my_repo = os.environ.get("MY_REPO", "AMN-Security/AMN")
 
-          # ۱. تغییر شناسه نصب به com.amn.vpn
           for root, _, files in os.walk("app"):
               for file in files:
                   if file in ("build.gradle", "build.gradle.kts"):
@@ -68,7 +65,6 @@ jobs:
                       with open(path, "w", encoding="utf-8") as f:
                           f.write(content)
 
-          # ۲. اعمال تغییرات نام، پشتیبانی تلگرام و پینگ
           target_dirs = ["app/src", "shared"]
           for base in target_dirs:
               if not os.path.exists(base):
@@ -82,18 +78,12 @@ jobs:
                                   text = f.read()
                               orig = text
 
-                              # تغییر لینک و آیدی تلگرام به @A_Mourdini_N
                               text = re.sub(r'https?://t\.me/[a-zA-Z0-9_]+', 'https://t.me/A_Mourdini_N', text)
                               text = re.sub(r'@CluvexStudio', '@A_Mourdini_N', text, flags=re.IGNORECASE)
-
-                              # اتصال سیستم آپدیت خودکار به ریپازیتوری شما
                               text = text.replace("CluvexStudio/ZedSecure", my_repo)
-
-                              # تغییر آدرس تست پینگ به Cloudflare
                               text = text.replace('https://www.gstatic.com/generate_204', 'http://cp.cloudflare.com')
                               text = text.replace('http://www.gstatic.com/generate_204', 'http://cp.cloudflare.com')
 
-                              # تغییر نام نمایشی به AMN
                               if file.endswith(".xml"):
                                   text = text.replace(">ZedSecure<", ">AMN<")
                                   text = text.replace("ZedSecure", "AMN")
@@ -143,10 +133,13 @@ jobs:
       - name: 7. Build Release APKs
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon --stacktrace
+          ./gradlew assembleRelease --no-daemon
 
       - name: 8. Custom Security Signing (AMN Exclusive Keystore)
         run: |
+          # نصب مستقیم ابزارهای zipalign و apksigner از مخازن لینوکس
+          sudo apt-get update && sudo apt-get install -y zipalign apksigner
+
           keytool -genkeypair -v \
             -keystore amn-release.jks \
             -alias amn_key \
@@ -158,12 +151,11 @@ jobs:
             -dname "CN=AMN, OU=Security, O=AMN, L=Tehran, S=Tehran, C=IR"
 
           mkdir -p output_apks
-          ANDROID_BUILD_TOOLS=$(ls -d$ANDROID_HOME/build-tools/* | tail -n 1)
 
-          for apk in $(find app/build/outputs/apk/release -name "*.apk"); do
+          for apk in $(find app/build/outputs/apk/release -name "*.apk" ! -name "*unsigned*"); do
             base_name=$(basename "$apk" | sed 's/ZedSecure/AMN/g' | sed 's/app-/AMN-/g')
-            "$ANDROID_BUILD_TOOLS/zipalign" -v -p 4 "$apk" "aligned-$base_name"
-            "$ANDROID_BUILD_TOOLS/apksigner" sign \
+            zipalign -v -p 4 "$apk" "aligned-$base_name"
+            apksigner sign \
               --ks amn-release.jks \
               --ks-key-alias amn_key \
               --ks-pass pass:AMNSecure2026! \
@@ -171,6 +163,21 @@ jobs:
               --out "output_apks/AMN-$base_name" \
               "aligned-$base_name"
           done
+
+          # اگر نام فایل‌ها بدون تگ خروجی بود، همه APKها را پردازش کن
+          if [ -z "$(ls -A output_apks)" ]; then
+            for apk in $(find app/build/outputs/apk/release -name "*.apk"); do
+              base_name=$(basename "$apk" | sed 's/ZedSecure/AMN/g' | sed 's/app-/AMN-/g')
+              zipalign -v -p 4 "$apk" "aligned-$base_name" || cp "$apk" "aligned-$base_name"
+              apksigner sign \
+                --ks amn-release.jks \
+                --ks-key-alias amn_key \
+                --ks-pass pass:AMNSecure2026! \
+                --key-pass pass:AMNSecure2026! \
+                --out "output_apks/AMN-$base_name" \
+                "aligned-$base_name"
+            done
+          fi
 
           cp amn-release.jks output_apks/
 
@@ -188,5 +195,4 @@ jobs:
           body: |
             ### نسخه اختصاصی AMN آماده دانلود است
             - **پشتیبانی تلگرام:** [@A_Mourdini_N](https://t.me/A_Mourdini_N)
-            - **نسخه پیشنهادی برای اکثر گوشی‌ها:** `arm64-v8a` یا `universal`
           files: output_apks/*.apk
