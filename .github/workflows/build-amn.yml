@@ -126,7 +126,7 @@ jobs:
                           pass
           EOF
 
-      - name: 5b. AMN UI Changes (Home title, Settings About, Support)
+      - name: 5b. AMN UI Changes (Home title, Settings About, Support, Z to A)
         run: |
           python3 - << 'PYEOF'
           import re, sys, glob
@@ -169,18 +169,13 @@ jobs:
           if c != 1:
               fail("support banner block not found")
 
-          # 2b) About group: keep only the version row, then add Created By + Support rows
+          # 2b) About group: remove the version row (and its AboutSheet popup), keep only Created By + Support rows
           start = t.index('stringResource(Res.string.settings_about),\n            modifier = Modifier.tourTargetInPage(TourTargets.SETTINGS_ABOUT),')
           gstart = t.index('{', start)
           body_start = t.index('val fromPlay', gstart)
           ver_row = t.index('SettingsMenuRow(\n                stringResource(Res.string.settings_about),\n                AppInfo.versionName,', body_start)
           ver_end = t.index('{ onAbout() }', ver_row) + len('{ onAbout() }')
           new_rows = '''SettingsMenuRow(
-                          stringResource(Res.string.settings_about),
-                          AppInfo.versionName,
-                          art = SettingsArts.About,
-                      ) { onAbout() }
-                      SettingsMenuRow(
                           "Created By Ali Mourdini",
                           art = SettingsArts.About,
                       ) { }
@@ -191,6 +186,23 @@ jobs:
                       ) { platform.openUri("https://t.me/A_Mourdini_N") }'''
           t = t[:body_start] + new_rows + t[ver_end:]
           write(p, t)
+
+          # 2c) Change "Z" to "A" in AppDesignPicker.kt (Old design preview card)
+          p_design = KT + "/settings/AppDesignPicker.kt"
+          t_design = read(p_design)
+          old_z_design = 'Text("Z", color = Color.White, style = MaterialTheme.typography.titleLargeEmphasized)'
+          if old_z_design not in t_design:
+              fail("Z text not found in AppDesignPicker.kt")
+          write(p_design, t_design.replace(old_z_design, 'Text("A", color = Color.White, style = MaterialTheme.typography.titleLargeEmphasized)', 1))
+
+          # 2d) Change "Z" to "A" in Onboarding.kt (Tour offer step card)
+          p_onb = KT + "/onboarding/Onboarding.kt"
+          t_onb = read(p_onb)
+          old_z_onb = '            Text(\n                "Z",\n                style = MaterialTheme.typography.displayLargeEmphasized,'
+          new_a_onb = '            Text(\n                "A",\n                style = MaterialTheme.typography.displayLargeEmphasized,'
+          if old_z_onb not in t_onb:
+              fail("Z text not found in Onboarding.kt")
+          write(p_onb, t_onb.replace(old_z_onb, new_a_onb, 1))
 
           # 3) Drop the tour step that pointed at the removed banner
           p = KT + "/onboarding/TourSteps.kt"
