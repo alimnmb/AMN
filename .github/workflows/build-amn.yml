@@ -10,7 +10,7 @@ on:
       release_notes:
         description: 'Release Notes (shown in the in-app update dialog)'
         required: false
-        default: '• ردیف کانفیگ رایگان هوشمند در صفحه اصلی (تست و اتصال خودکار در پس‌زمینه)\n• چرخش دکمه اتصال تا یافتن سریع‌ترین سرور\n• فروشگاه اشتراک اختصاصی VIP (هر گیگ ۶,۰۰۰ تومان)'
+        default: '• افزودن ردیف کانفیگ رایگان هوشمند در صفحه اصلی (تست و اتصال خودکار در پس‌زمینه)\n• چرخش دکمه اتصال تا یافتن سریع‌ترین سرور\n• فروشگاه اشتراک اختصاصی VIP (هر گیگ ۶,۰۰۰ تومان)'
 
 permissions:
   contents: write
@@ -183,7 +183,7 @@ jobs:
               )
               write(p, t)
 
-          # 2) ConfigRepository: helper to select free mode placeholder
+          # 2) ConfigRepository: helper to select free mode placeholder & upsert
           p_cr = "shared/src/commonMain/kotlin/dev/cluvex/zedsecure/data/config/ConfigRepository.kt"
           t_cr = read(p_cr)
           cr_anchor = "    fun setActive(id: String?) {"
@@ -206,6 +206,12 @@ jobs:
               '            persistProfiles()',
               '        }',
               '        setActive("amn_free_smart")',
+              '    }',
+              '',
+              '    fun upsertProfile(profile: VpnProfile) {',
+              '        _profiles.update { list -> if (list.any { it.id == profile.id }) list.map { if (it.id == profile.id) profile else it } else list + profile }',
+              '        persistProfiles()',
+              '        setActive(profile.id)',
               '    }',
               '',
               '    fun setActive(id: String?) {',
@@ -271,12 +277,12 @@ jobs:
               '                VpnManager.onStarting("⚡ در حال یافتن بهترین سرور رایگان...")',
               '                val found = resolveBestFreeProfile()',
               '                if (found != null) {',
-              '                    configRepository.upsertProfileDirect(found)',
+              '                    configRepository.upsertProfile(found)',
               '                    found',
               '                } else {',
               '                    planning = false',
               '                    VpnManager.onDisconnected()',
-              '                    toast("خطا در یافتن سرور رایگان؛ دوباره تلاش کنید")',
+              '                    toast("خطا در دریافت سرورهای رایگان؛ دوباره تلاش کنید")',
               '                    return@launch',
               '                }',
               '            } else {',
@@ -288,9 +294,8 @@ jobs:
               '                planning = false',
               '            }',
           ])
-          write(p_ma, t_ma.replace(old_toggle, new_toggle, 1))
+          t_ma = t_ma.replace(old_toggle, new_toggle, 1)
 
-          # Add resolveBestFreeProfile and upsertProfileDirect
           extra_ma_helpers = "\n".join([
               '',
               '    private suspend fun resolveBestFreeProfile(): dev.cluvex.zedsecure.domain.config.VpnProfile? = withContext(Dispatchers.IO) {',
@@ -311,7 +316,7 @@ jobs:
               '                    conn.disconnect()',
               '                    if (!rawText.isNullOrBlank()) break',
               '                }',
-              '                conn.disconnect',
+              '                conn.disconnect()',
               '            } catch (_: Exception) { }',
               '        }',
               '        val body = rawText?.trim() ?: return@withContext null',
@@ -358,11 +363,6 @@ jobs:
               '            isLocked = true,',
               '            lastPingMs = best.second',
               '        )',
-              '    }',
-              '',
-              '    private fun ConfigRepository.upsertProfileDirect(profile: dev.cluvex.zedsecure.domain.config.VpnProfile) {',
-              '        update { profile }',
-              '        setActive(profile.id)',
               '    }',
           ])
           t_ma = t_ma.rstrip()
@@ -820,13 +820,12 @@ jobs:
                           pass
           EOF
 
-      - name: 7. Build Release APKs with Direct Check
+      - name: 7. Build Release APKs
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon --stacktrace
-          ls -la app/build/outputs/apk/release/
+          ./gradlew assembleRelease --no-daemon
 
-      - name: 8. Sign APKs with Permanent AMN Keystore
+      - name: 8. Sign APKs with Official Android SDK Build-Tools
         env:
           APP_VER: ${{ inputs.app_version || '3.1.8' }}
         run: |
@@ -858,7 +857,6 @@ jobs:
               --out "output_apks/$base_name" \
               "aligned-$base_name"
           done
-          ls -la output_apks/
 
       - name: 9. Publish APKs to GitHub Releases
         uses: softprops/action-gh-release@v2
@@ -868,7 +866,7 @@ jobs:
           make_latest: true
           body: |
             ### What's new
-            ${{ inputs.release_notes || '• افزودن ردیف کانفیگ رایگان هوشمند در صفحه اصلی\n• فروشگاه اشتراک اختصاصی VIP (هر گیگ ۶,۰۰۰ تومان)\n• بروزرسانی راهنمای تعاملی برنامه' }}
+            ${{ inputs.release_notes || '• افزودن ردیف کانفیگ رایگان هوشمند در صفحه اصلی (تست و اتصال خودکار در پس‌زمینه)\n• چرخش دکمه اتصال تا یافتن سریع‌ترین سرور\n• فروشگاه اشتراک اختصاصی VIP (هر گیگ ۶,۰۰۰ تومان)' }}
 
             ---
             - **پشتیبانی تلگرام:** [@A_Mourdini_N](https://t.me/A_Mourdini_N)
