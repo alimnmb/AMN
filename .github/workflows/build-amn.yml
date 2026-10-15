@@ -2,6 +2,15 @@ name: Build AMN Pro APK
 
 on:
   workflow_dispatch:
+    inputs:
+      app_version:
+        description: 'شماره نسخه برنامه (برای انتشار آپدیت جدید، عدد را بالاتر ببرید مثلا 3.1.7)'
+        required: false
+        default: '3.1.6'
+      release_notes:
+        description: 'توضیحات آپدیت (در پنجره پاپ‌آپ آپدیت داخل برنامه نمایش داده می‌شود)'
+        required: false
+        default: '• بهبود سرعت و پایداری اتصال و بهینه‌سازی رابط کاربری اختصاصی AMN'
 
 permissions:
   contents: write
@@ -29,7 +38,7 @@ jobs:
 
       - name: 4. Setup NDK & Build VPN Cores
         run: |
-          DEFAULT_NDK=$(ls -d$ANDROID_HOME/ndk/* 2>/dev/null | sort -V | tail -n 1)
+          DEFAULT_NDK=$(ls -d $ANDROID_HOME/ndk/* 2>/dev/null | sort -V | tail -n 1)
           if [ -n "$DEFAULT_NDK" ]; then
             export ANDROID_NDK_HOME="$DEFAULT_NDK"
             export NDK_HOME="$DEFAULT_NDK"
@@ -47,14 +56,29 @@ jobs:
             ./tools/build-zedcore.sh || true
           fi
 
-      - name: 5. Safe Rebrand to AMN (Package ID + UI Strings Only)
+      - name: 5. Safe Rebrand to AMN & Dynamic Version Setup
         env:
           MY_REPO: ${{ github.repository }}
+          APP_VER: ${{ inputs.app_version || '3.1.6' }}
+          RUN_NUM: ${{ github.run_number }}
         run: |
           python3 - << 'EOF'
           import os, re
 
           my_repo = os.environ.get("MY_REPO", "alimnmb/AMN")
+          app_ver = os.environ.get("APP_VER", "3.1.6").strip() or "3.1.6"
+          run_num = int(os.environ.get("RUN_NUM", "1"))
+          ver_code = 35 + run_num
+
+          # ۰. تنظیم خودکار versionName و افزایش خودکار versionCode برای آپدیت بدون نیاز به حذف نسخه قبلی
+          grad_props = "gradle.properties"
+          if os.path.exists(grad_props):
+              with open(grad_props, "r", encoding="utf-8") as f:
+                  gp = f.read()
+              gp = re.sub(r'zedsecure\.versionName=.*', f'zedsecure.versionName={app_ver}', gp)
+              gp = re.sub(r'zedsecure\.versionCode=.*', f'zedsecure.versionCode={ver_code}', gp)
+              with open(grad_props, "w", encoding="utf-8") as f:
+                  f.write(gp)
 
           # ۱. تغییر شناسه نصب به com.amn.vpn (برای نصب در کنار ZedSecure بدون تداخل)
           for root, _, files in os.walk("app"):
@@ -102,31 +126,31 @@ jobs:
                       except Exception:
                           pass
 
-          # ۴. تغییر نام نمایشی و لینک تلگرام در فایل‌های Kotlin
-          for root, _, files in os.walk("app/src/main"):
-              for file in files:
-                  if file.endswith(".kt"):
-                      path = os.path.join(root, file)
-                      try:
-                          with open(path, "r", encoding="utf-8") as f:
-                              text = f.read()
-                          orig = text
-                          text = re.sub(r'https?://t\.me/[a-zA-Z0-9_]+', 'https://t.me/A_Mourdini_N', text)
-                          text = re.sub(r'@CluvexStudio', '@A_Mourdini_N', text, flags=re.IGNORECASE)
-                          text = text.replace('"ZedSecure"', '"AMN"')
-                          text = text.replace('"ZedSecure VPN"', '"AMN VPN"')
-                          text = text.replace("CluvexStudio/ZedSecure", my_repo)
-                          text = text.replace('https://www.gstatic.com/generate_204', 'http://cp.cloudflare.com')
-                          if file.lower() == "color.kt":
-                              text = re.sub(r'0xFF[0-9A-Fa-f]{6}', '0xFF00F5D4', text, count=2)
-                          if text != orig:
-                              with open(path, "w", encoding="utf-8") as f:
-                                  f.write(text)
-                      except Exception:
-                          pass
+          # ۴. تغییر نام نمایشی، User-Agent و ریپازیتوری گیت‌هاب در تمام فایل‌های Kotlin (هم app و هم shared)
+          for base_dir in ("app/src/main", "shared/src"):
+              for root, _, files in os.walk(base_dir):
+                  for file in files:
+                      if file.endswith(".kt"):
+                          path = os.path.join(root, file)
+                          try:
+                              with open(path, "r", encoding="utf-8") as f:
+                                  text = f.read()
+                              orig = text
+                              text = re.sub(r'https?://t\.me/[a-zA-Z0-9_]+', 'https://t.me/A_Mourdini_N', text)
+                              text = re.sub(r'@CluvexStudio', '@A_Mourdini_N', text, flags=re.IGNORECASE)
+                              text = text.replace('"ZedSecure"', '"AMN"')
+                              text = text.replace('"ZedSecure VPN"', '"AMN VPN"')
+                              text = text.replace('"ZedSecure/', '"AMN/')
+                              text = text.replace('"ZedSecure-SpeedTest"', '"AMN-SpeedTest"')
+                              text = text.replace("CluvexStudio/ZedSecure", my_repo)
+                              if text != orig:
+                                  with open(path, "w", encoding="utf-8") as f:
+                                      f.write(text)
+                          except Exception:
+                              pass
           EOF
 
-      - name: 5b. AMN UI Changes (Home title, Settings About, Support, Z to A)
+      - name: 5b. AMN UI Changes, Auto-Update Popup & Default Settings
         run: |
           python3 - << 'PYEOF'
           import re, sys, glob
@@ -145,7 +169,7 @@ jobs:
 
           KT = "shared/src/commonMain/kotlin/dev/cluvex/zedsecure/ui"
 
-          # 1) Home title: app_name -> AMN (shared Compose resources used by the Home screen)
+          # 1) Home title: app_name -> AMN
           n = 0
           for p in glob.glob("shared/src/commonMain/composeResources/values*/strings.xml"):
               t = read(p)
@@ -169,13 +193,28 @@ jobs:
           if c != 1:
               fail("support banner block not found")
 
-          # 2b) About group: remove the version row (and its AboutSheet popup), keep only Created By + Support rows
+          # 2b) About group: keep Check for Updates row + Created By Ali Mourdini + Support rows (without AboutSheet popup)
           start = t.index('stringResource(Res.string.settings_about),\n            modifier = Modifier.tourTargetInPage(TourTargets.SETTINGS_ABOUT),')
           gstart = t.index('{', start)
           body_start = t.index('val fromPlay', gstart)
           ver_row = t.index('SettingsMenuRow(\n                stringResource(Res.string.settings_about),\n                AppInfo.versionName,', body_start)
           ver_end = t.index('{ onAbout() }', ver_row) + len('{ onAbout() }')
-          new_rows = '''SettingsMenuRow(
+          new_rows = '''val fromPlay = platform.distribution == Distribution.PlayStore
+                      SettingsMenuRow(
+                          stringResource(Res.string.update_check_title),
+                          when {
+                              checking -> stringResource(Res.string.update_checking)
+                              fromPlay -> stringResource(Res.string.update_check_summary)
+                              else -> stringResource(Res.string.update_check_summary_github)
+                          },
+                          art = SettingsArts.Update,
+                          trailing = if (checking) {
+                              { SettingsBusyIndicator() }
+                          } else {
+                              null
+                          },
+                      ) { if (!checking) { checking = true; checkTrigger++ } }
+                      SettingsMenuRow(
                           "Created By Ali Mourdini",
                           art = SettingsArts.About,
                       ) { }
@@ -203,6 +242,182 @@ jobs:
           if old_z_onb not in t_onb:
               fail("Z text not found in Onboarding.kt")
           write(p_onb, t_onb.replace(old_z_onb, new_a_onb, 1))
+
+          # 2e) Change "Z" to "A" on HomeScreen.kt (Old design main connect button) and AppearancePickers.kt (Hero style preview)
+          p_home = KT + "/home/HomeScreen.kt"
+          t_home = read(p_home)
+          old_z_home = '                else -> Text(\n                    text = "Z",'
+          new_a_home = '                else -> Text(\n                    text = "A",'
+          if old_z_home not in t_home:
+              fail("Z text not found in HomeScreen.kt")
+          write(p_home, t_home.replace(old_z_home, new_a_home, 1))
+
+          p_pickers = KT + "/settings/AppearancePickers.kt"
+          t_pickers = read(p_pickers)
+          old_z_pickers = ') { Text("Z", color = on, fontSize = 18.sp, fontWeight = FontWeight.Bold) }'
+          new_a_pickers = ') { Text("A", color = on, fontSize = 18.sp, fontWeight = FontWeight.Bold) }'
+          if old_z_pickers not in t_pickers:
+              fail("Z text not found in AppearancePickers.kt")
+          write(p_pickers, t_pickers.replace(old_z_pickers, new_a_pickers, 1))
+
+          # 2f) Replace Z vector glyph with A in ic_zed_glyph.xml and ic_zed_mark.xml (used in PortalHome, etc.)
+          a_path_512 = "M256,86 L432,426 L342,426 L306,350 L206,350 L170,426 L80,426 Z M228,284 L284,284 L256,218 Z"
+          p_glyph = "shared/src/commonMain/composeResources/drawable/ic_zed_glyph.xml"
+          write(p_glyph, f'''<vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="24dp"
+              android:height="24dp"
+              android:viewportWidth="512"
+              android:viewportHeight="512">
+              <path android:fillColor="#FFFFFFFF" android:pathData="{a_path_512}" />
+          </vector>
+          ''')
+          p_mark = "shared/src/commonMain/composeResources/drawable/ic_zed_mark.xml"
+          write(p_mark, f'''<vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="512dp"
+              android:height="512dp"
+              android:viewportWidth="512"
+              android:viewportHeight="512">
+              <path android:fillColor="#FF00F5D4" android:pathData="M112,0 L400,0 A112,112 0 0 1 512,112 L512,400 A112,112 0 0 1 400,512 L112,512 A112,112 0 0 1 0,400 L0,112 A112,112 0 0 1 112,0 Z" />
+              <path android:fillColor="#FF090D16" android:pathData="{a_path_512}" />
+          </vector>
+          ''')
+
+          # 2g) Add "AMN Cyber" signature preset to ThemeProfiles.kt
+          p_themes = KT + "/theme/ThemeProfiles.kt"
+          t_themes = read(p_themes)
+          amn_profile = '''val ThemeProfiles: List<ThemeProfile> = listOf(
+              ThemeProfile(
+                  id = "amn_cyber",
+                  name = "AMN Cyber",
+                  accentIndex = 2,
+                  amoled = true,
+                  download = 0xFF00F5D4,
+                  upload = 0xFF38BDF8,
+                  downloadTile = 0xFF072624,
+                  uploadTile = 0xFF091E36,
+                  connect = 0xFF00F5D4,
+                  connected = 0xFF2563EB,
+                  tapHint = 0xFF99F6E4,
+                  serverCard = 0xFF0B1528,
+                  serverActive = 0xFF00F5D4,
+                  configCard = 0xFF0D1B33,
+                  configCardText = 0xFFECFEFF,
+              ),'''
+          if 'val ThemeProfiles: List<ThemeProfile> = listOf(' not in t_themes:
+              fail("ThemeProfiles list not found")
+          write(p_themes, t_themes.replace('val ThemeProfiles: List<ThemeProfile> = listOf(', amn_profile, 1))
+
+          # 2h) Enable auto-update subscriptions (every 1h), auto-test, and auto-sort by default
+          p_settings_model = "shared/src/commonMain/kotlin/dev/cluvex/zedsecure/domain/model/AppSettings.kt"
+          t_model = read(p_settings_model)
+          old_sub_defaults = """    val autoUpdateSubscriptions: Boolean = false,
+    val subscriptionUpdateIntervalHours: Int = 12,
+    val autoTestAfterUpdate: Boolean = false,
+    val autoRemoveInvalidAfterTest: Boolean = false,
+    val autoSortAfterTest: Boolean = false,"""
+          new_sub_defaults = """    val autoUpdateSubscriptions: Boolean = true,
+    val subscriptionUpdateIntervalHours: Int = 1,
+    val autoTestAfterUpdate: Boolean = true,
+    val autoRemoveInvalidAfterTest: Boolean = false,
+    val autoSortAfterTest: Boolean = true,"""
+          if old_sub_defaults not in t_model:
+              fail("subscription defaults block not found in AppSettings.kt")
+          write(p_settings_model, t_model.replace(old_sub_defaults, new_sub_defaults, 1))
+
+          p_repo = "app/src/main/java/dev/cluvex/zedsecure/data/settings/SettingsRepository.kt"
+          t_repo = read(p_repo)
+          old_repo_init = '        val d = AppSettings(useZepTun = true, directDns = "localhost")'
+          new_repo_init = """        val d = AppSettings(useZepTun = true, directDns = "localhost")
+        if (!prefs.getBoolean("amn_sub_defaults_v1", false)) {
+            prefs.edit()
+                .putBoolean("auto_sub", true)
+                .putInt("sub_interval", 1)
+                .putBoolean("auto_test_after_update", true)
+                .putBoolean("auto_sort_after_test", true)
+                .putBoolean("amn_sub_defaults_v1", true)
+                .apply()
+        }"""
+          if old_repo_init not in t_repo:
+              fail("SettingsRepository init line not found")
+          write(p_repo, t_repo.replace(old_repo_init, new_repo_init, 1))
+
+          # 2i) Connect GitHub Auto-Update Checker & Main Screen Popup to AMN Releases
+          p_upd = "shared/src/commonMain/kotlin/dev/cluvex/zedsecure/data/update/UpdateChecker.kt"
+          t_upd = read(p_upd)
+          old_apk_lookup = '''        val apk = if (abis.isEmpty()) null else {
+            (abis.map { "ZedSecure-$version-$it.apk" } + "ZedSecure-$version-universal.apk")
+                .firstNotNullOfOrNull { assets[it] }
+        }'''
+          new_apk_lookup = '''        val apk = abis.firstNotNullOfOrNull { abi ->
+            assets.entries.firstOrNull { (name, _) ->
+                name.endsWith(".apk", ignoreCase = true) && name.contains(abi, ignoreCase = true)
+            }?.value
+        } ?: assets.entries.firstOrNull { (name, _) -> name.endsWith(".apk", ignoreCase = true) }?.value'''
+          if old_apk_lookup not in t_upd:
+              fail("apk lookup not found in UpdateChecker.kt")
+          t_upd = t_upd.replace(old_apk_lookup, new_apk_lookup, 1)
+
+          old_notes = '''        val start = markdown.indexOf(WHATS_NEW)
+        if (start < 0) return ""
+        val section = markdown.substring(start + WHATS_NEW.length).substringBefore("\\n<sub>").substringBefore("\\n### ")'''
+          new_notes = '''        val start = markdown.indexOf(WHATS_NEW)
+        val section = if (start >= 0) {
+            markdown.substring(start + WHATS_NEW.length).substringBefore("\\n<sub>").substringBefore("\\n### ")
+        } else {
+            markdown.substringBefore("\\n<sub>")
+        }'''
+          if old_notes not in t_upd:
+              fail("releaseNotesFrom block not found in UpdateChecker.kt")
+          t_upd = t_upd.replace(old_notes, new_notes, 1)
+
+          t_upd = t_upd.replace(
+              "const val UPDATE_CHECK_INTERVAL_MS = 12L * 60 * 60 * 1000",
+              "const val UPDATE_CHECK_INTERVAL_MS = 15L * 60 * 1000",
+              1
+          )
+          write(p_upd, t_upd)
+
+          p_nudge = KT + "/update/NudgeHost.kt"
+          t_nudge = read(p_nudge)
+          old_nudge = '''    LaunchedEffect(settings.lastUpdateCheckMs) {
+        val now = currentTimeMillis()
+        if (settings.lastUpdateCheckMs == 0L) {
+            onUpdateSettings { it.copy(lastUpdateCheckMs = now) }
+            return@LaunchedEffect
+        }
+        if (now - settings.lastUpdateCheckMs < NudgePolicy.UPDATE_CHECK_INTERVAL_MS) return@LaunchedEffect
+
+        onUpdateSettings { it.copy(lastUpdateCheckMs = now) }
+        val socks = if (VpnManager.status.value.state == ConnectionState.Connected) {
+            VpnManager.activeSocksPort
+        } else {
+            null
+        }
+        val info = UpdateChecker.fetchLatest(
+            platform.distribution,
+            platform.deviceAbis,
+            socks,
+            settings.language.tag ?: "en",
+        ) ?: return@LaunchedEffect'''
+          new_nudge = '''    LaunchedEffect(status.state == ConnectionState.Connected) {
+        val now = currentTimeMillis()
+        if (settings.lastUpdateCheckMs != 0L && now - settings.lastUpdateCheckMs < NudgePolicy.UPDATE_CHECK_INTERVAL_MS) return@LaunchedEffect
+
+        val socks = if (VpnManager.status.value.state == ConnectionState.Connected) {
+            VpnManager.activeSocksPort
+        } else {
+            null
+        }
+        val info = UpdateChecker.fetchLatest(
+            platform.distribution,
+            platform.deviceAbis,
+            socks,
+            settings.language.tag ?: "en",
+        ) ?: return@LaunchedEffect
+        onUpdateSettings { it.copy(lastUpdateCheckMs = now) }'''
+          if old_nudge not in t_nudge:
+              fail("LaunchedEffect block not found in NudgeHost.kt")
+          write(p_nudge, t_nudge.replace(old_nudge, new_nudge, 1))
 
           # 3) Drop the tour step that pointed at the removed banner
           p = KT + "/onboarding/TourSteps.kt"
@@ -338,24 +553,38 @@ jobs:
             }
           done
 
-      - name: 8. Sign APKs with Official Android SDK Build-Tools
+      - name: 8. Sign APKs with Persistent AMN Keystore (Allows Updating Without Uninstalling)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MY_REPO: ${{ github.repository }}
+          APP_VER: ${{ inputs.app_version || '3.1.6' }}
         run: |
-          keytool -genkeypair -v \
-            -keystore amn-release.jks \
-            -alias amn_key \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -storepass AMNSecure2026! \
-            -keypass AMNSecure2026! \
-            -dname "CN=AMN, OU=Security, O=AMN, L=Tehran, S=Tehran, C=IR"
+          if ! gh release download amn-keystore-vault -p "amn-release.jks" --repo "$MY_REPO" 2>/dev/null; then
+            echo "Generating permanent AMN Keystore for the first time..."
+            keytool -genkeypair -v \
+              -keystore amn-release.jks \
+              -alias amn_key \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -storepass AMNSecure2026! \
+              -keypass AMNSecure2026! \
+              -dname "CN=AMN, OU=Security, O=AMN, L=Tehran, S=Tehran, C=IR"
+            gh release create amn-keystore-vault amn-release.jks \
+              --repo "$MY_REPO" \
+              --title "AMN Permanent Keystore (Do Not Delete)" \
+              --notes "این فایل کلید امضای ثابت برنامه است تا آپدیت‌های بعدی بدون نیاز به حذف نسخه قبلی روی گوشی نصب شوند." \
+              --prerelease || true
+          else
+            echo "Reusing existing permanent AMN Keystore from amn-keystore-vault..."
+          fi
 
           mkdir -p output_apks
           ZIPALIGN=$(find "$ANDROID_HOME/build-tools" -name "zipalign" | sort -V | tail -n 1)
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name "apksigner" | sort -V | tail -n 1)
 
           for apk in $(find app/build/outputs/apk/release -name "*.apk"); do
-            base_name=$(basename "$apk" | sed 's/-unsigned//g' | sed 's/ZedSecure/AMN/g' | sed 's/app-/AMN-/g')
+            base_name=$(basename "$apk" | sed 's/-unsigned//g' | sed 's/-release//g' | sed 's/ZedSecure/AMN/g' | sed 's/app-/AMN-v'"$APP_VER"'-/g')
             "$ZIPALIGN" -f -p 4 "$apk" "aligned-$base_name"
             "$APKSIGNER" sign \
               --ks amn-release.jks \
@@ -365,17 +594,21 @@ jobs:
               --v1-signing-enabled true \
               --v2-signing-enabled true \
               --v3-signing-enabled true \
-              --out "output_apks/AMN-$base_name" \
+              --out "output_apks/$base_name" \
               "aligned-$base_name"
           done
 
       - name: 9. Publish APKs to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: AMN-v3.1.6-Working
-          name: "AMN Security v3.1.6 (Ready)"
+          tag_name: AMN-v${{ inputs.app_version || '3.1.6' }}
+          name: "AMN Security v${{ inputs.app_version || '3.1.6' }}"
+          make_latest: true
           body: |
-            ### نسخه نهایی AMN (قابل نصب در کنار ZedSecure و بدون کرش)
+            ### What's new
+            ${{ inputs.release_notes || '• بهبود سرعت و پایداری اتصال و بهینه‌سازی رابط کاربری اختصاصی AMN' }}
+
+            ---
             - **پشتیبانی تلگرام:** [@A_Mourdini_N](https://t.me/A_Mourdini_N)
-            - **نسخه پیشنهادی:** `arm64-v8a`
+            - **نسخه پیشنهادی برای اکثر گوشی‌ها:** `arm64-v8a`
           files: output_apks/*.apk
