@@ -4,13 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       app_version:
-        description: 'App Version (e.g., 3.1.8 for updates)'
+        description: 'App Version (e.g., 3.1.6 or 3.1.7 for updates)'
         required: false
-        default: '3.1.8'
+        default: '3.1.6'
       release_notes:
         description: 'Release Notes (shown in the in-app update dialog)'
         required: false
-        default: '• افزودن ردیف کانفیگ رایگان هوشمند در صفحه اصلی (تست و اتصال خودکار در پس‌زمینه)\n• چرخش دکمه اتصال تا یافتن سریع‌ترین سرور\n• فروشگاه اشتراک اختصاصی VIP (هر گیگ ۶,۰۰۰ تومان)'
+        default: '• بهبود سرعت و پایداری اتصال و بهینه‌سازی رابط کاربری اختصاصی AMN'
 
 permissions:
   contents: write
@@ -59,17 +59,18 @@ jobs:
       - name: 5. Safe Rebrand to AMN & Dynamic Version Setup
         env:
           MY_REPO: ${{ github.repository }}
-          APP_VER: ${{ inputs.app_version || '3.1.8' }}
+          APP_VER: ${{ inputs.app_version || '3.1.6' }}
           RUN_NUM: ${{ github.run_number }}
         run: |
           python3 - << 'EOF'
           import os, re
 
           my_repo = os.environ.get("MY_REPO", "alimourdini1/AMN")
-          app_ver = os.environ.get("APP_VER", "3.1.8").strip() or "3.1.8"
+          app_ver = os.environ.get("APP_VER", "3.1.6").strip() or "3.1.6"
           run_num = int(os.environ.get("RUN_NUM", "1"))
           ver_code = 35 + run_num
 
+          # 0. Auto-increment versionCode & set versionName so updates install without uninstalling
           grad_props = "gradle.properties"
           if os.path.exists(grad_props):
               with open(grad_props, "r", encoding="utf-8") as f:
@@ -79,6 +80,7 @@ jobs:
               with open(grad_props, "w", encoding="utf-8") as f:
                   f.write(gp)
 
+          # 1. Change applicationId to com.amn.vpn
           for root, _, files in os.walk("app"):
               for file in files:
                   if file in ("build.gradle", "build.gradle.kts"):
@@ -93,6 +95,7 @@ jobs:
                       with open(path, "w", encoding="utf-8") as f:
                           f.write(content)
 
+          # 2. Update provider authorities in AndroidManifest.xml
           manifest_path = "app/src/main/AndroidManifest.xml"
           if os.path.exists(manifest_path):
               with open(manifest_path, "r", encoding="utf-8") as f:
@@ -101,6 +104,7 @@ jobs:
               with open(manifest_path, "w", encoding="utf-8") as f:
                   f.write(m_text)
 
+          # 3. Update strings.xml in app/src/main/res
           for root, _, files in os.walk("app/src/main/res"):
               for file in files:
                   if file == "strings.xml":
@@ -122,6 +126,7 @@ jobs:
                       except Exception:
                           pass
 
+          # 4. Update display names, User-Agent, and GitHub repo across both app and shared Kotlin files
           for base_dir in ("app/src/main", "shared/src"):
               for root, _, files in os.walk(base_dir):
                   for file in files:
@@ -145,11 +150,10 @@ jobs:
                               pass
           EOF
 
-      - name: 5b. AMN UI Changes, Home Free Row & VIP Store
+      - name: 5b. AMN UI Changes, Auto-Update Popup & Default Settings
         run: |
           python3 - << 'PYEOF'
           import re, sys, glob
-          from pathlib import Path
 
           def fail(msg):
               print("AMN PATCH FAILED: " + msg)
@@ -165,560 +169,36 @@ jobs:
 
           KT = "shared/src/commonMain/kotlin/dev/cluvex/zedsecure/ui"
 
-          # 1) Strings
+          # 1) Home title: app_name -> AMN
+          n = 0
           for p in glob.glob("shared/src/commonMain/composeResources/values*/strings.xml"):
               t = read(p)
-              is_fa = "values-fa" in p
-              t = re.sub(r'(<string name="app_name">)[^<]*(</string>)', r'\1AMN\2', t)
-              t = re.sub(
-                  r'(<string name="nav_locked">)[^<]*(</string>)',
-                  r'\1فروشگاه\2' if is_fa else r'\1VIP Store\2',
-                  t
-              )
-              t = re.sub(
-                  r'>([^<]*?)ZedSecure([^<]*?)<',
-                  lambda m: '>' + m.group(1) + 'AMN' + m.group(2) + '<',
-                  t,
-                  flags=re.IGNORECASE
-              )
-              write(p, t)
+              new = re.sub(r'(<string name="app_name">)[^<]*(</string>)', r'\1AMN\2', t)
+              if new != t:
+                  write(p, new)
+                  n += 1
+          if n == 0:
+              fail("app_name not found in shared strings.xml")
 
-          # 2) ConfigRepository: helper to select free mode placeholder & upsert
-          p_cr = "shared/src/commonMain/kotlin/dev/cluvex/zedsecure/data/config/ConfigRepository.kt"
-          t_cr = read(p_cr)
-          cr_anchor = "    fun setActive(id: String?) {"
-          cr_inject = "\n".join([
-              '    fun selectFreeModePlaceholder() {',
-              '        val existing = _profiles.value.firstOrNull { it.id == "amn_free_smart" }',
-              '        val placeholder = existing ?: VpnProfile(',
-              '            id = "amn_free_smart",',
-              '            name = "⚡ کانفیگ رایگان هوشمند",',
-              '            protocol = "AUTO",',
-              '            address = "auto",',
-              '            port = 443,',
-              '            transportLabel = "AMN Smart Free",',
-              '            source = ProfileSource.Link("vless://00000000-0000-0000-0000-000000000000@127.0.0.1:443?security=none&type=tcp#AMN-Free"),',
-              '            addedAt = currentTimeMillis(),',
-              '            isLocked = true,',
-              '        )',
-              '        if (existing == null) {',
-              '            _profiles.value = _profiles.value + placeholder',
-              '            persistProfiles()',
-              '        }',
-              '        setActive("amn_free_smart")',
-              '    }',
-              '',
-              '    fun upsertProfile(profile: VpnProfile) {',
-              '        _profiles.update { list -> if (list.any { it.id == profile.id }) list.map { if (it.id == profile.id) profile else it } else list + profile }',
-              '        persistProfiles()',
-              '        setActive(profile.id)',
-              '    }',
-              '',
-              '    fun setActive(id: String?) {',
-          ])
-          write(p_cr, t_cr.replace(cr_anchor, cr_inject, 1))
+          # 2) Settings screen
+          p = KT + "/settings/SettingsScreen.kt"
+          t = read(p)
 
-          # 3) 4 Bottom Nav tabs
-          p_top = KT + "/navigation/TopDestination.kt"
-          write(p_top, "\n".join([
-              'package dev.cluvex.zedsecure.ui.navigation',
-              '',
-              'import dev.cluvex.zedsecure.shared.resources.Res',
-              'import dev.cluvex.zedsecure.shared.resources.ic_dns',
-              'import dev.cluvex.zedsecure.shared.resources.ic_home',
-              'import dev.cluvex.zedsecure.shared.resources.ic_settings',
-              'import dev.cluvex.zedsecure.shared.resources.ic_star',
-              'import dev.cluvex.zedsecure.shared.resources.nav_home',
-              'import dev.cluvex.zedsecure.shared.resources.nav_locked',
-              'import dev.cluvex.zedsecure.shared.resources.nav_servers',
-              'import dev.cluvex.zedsecure.shared.resources.nav_settings',
-              'import org.jetbrains.compose.resources.DrawableResource',
-              'import org.jetbrains.compose.resources.StringResource',
-              '',
-              'enum class TopDestination(',
-              '    val labelRes: StringResource,',
-              '    val icon: DrawableResource,',
-              ') {',
-              '    Home(Res.string.nav_home, Res.drawable.ic_home),',
-              '    Servers(Res.string.nav_servers, Res.drawable.ic_dns),',
-              '    Vault(Res.string.nav_locked, Res.drawable.ic_star),',
-              '    Settings(Res.string.nav_settings, Res.drawable.ic_settings),',
-              '}',
-          ]))
+          # 2a) remove the "Support the project" banner group
+          pat = re.compile(
+              r'\n[ ]*SettingsGroup\(modifier = Modifier\.tourTargetInPage\(TourTargets\.SETTINGS_SUPPORT\)\) \{\n'
+              r'[ ]*SettingsBannerRow\(\n.*?\) \{ onOpen\(SettingsPage\.Support\) \}\n'
+              r'[ ]*\}\n', re.S)
+          t, c = pat.subn('\n', t, count=1)
+          if c != 1:
+              fail("support banner block not found")
 
-          # 4) MainActivity: background test & spin connect button
-          p_ma = "app/src/main/java/dev/cluvex/zedsecure/MainActivity.kt"
-          t_ma = read(p_ma)
-          old_toggle = "\n".join([
-              '        if (planning) return',
-              '        val profile = configRepository.activeProfile()',
-              '        if (profile == null) {',
-              '            toast(getString(R.string.select_config_first))',
-              '            return',
-              '        }',
-              '        planning = true',
-              '        lifecycleScope.launch {',
-              '            val plan = try {',
-              '                withContext(Dispatchers.IO) { planner.plan(profile) }',
-              '            } finally {',
-              '                planning = false',
-              '            }',
-          ])
-          new_toggle = "\n".join([
-              '        if (planning) return',
-              '        val initialProfile = configRepository.activeProfile()',
-              '        if (initialProfile == null) {',
-              '            toast(getString(R.string.select_config_first))',
-              '            return',
-              '        }',
-              '        planning = true',
-              '        lifecycleScope.launch {',
-              '            val profile = if (initialProfile.id == "amn_free_smart") {',
-              '                VpnManager.onStarting("⚡ در حال یافتن بهترین سرور رایگان...")',
-              '                val found = resolveBestFreeProfile()',
-              '                if (found != null) {',
-              '                    configRepository.upsertProfile(found)',
-              '                    found',
-              '                } else {',
-              '                    planning = false',
-              '                    VpnManager.onDisconnected()',
-              '                    toast("خطا در دریافت سرورهای رایگان؛ دوباره تلاش کنید")',
-              '                    return@launch',
-              '                }',
-              '            } else {',
-              '                initialProfile',
-              '            }',
-              '            val plan = try {',
-              '                withContext(Dispatchers.IO) { planner.plan(profile) }',
-              '            } finally {',
-              '                planning = false',
-              '            }',
-          ])
-          t_ma = t_ma.replace(old_toggle, new_toggle, 1)
-
-          extra_ma_helpers = "\n".join([
-              '',
-              '    private suspend fun resolveBestFreeProfile(): dev.cluvex.zedsecure.domain.config.VpnProfile? = withContext(Dispatchers.IO) {',
-              '        val urls = listOf(',
-              '            "https://raw.githubusercontent.com/patterniha/Free-Configs/main/configs.txt",',
-              '            "https://cdn.jsdelivr.net/gh/patterniha/Free-Configs@main/configs.txt",',
-              '            "https://ghproxy.net/https://raw.githubusercontent.com/patterniha/Free-Configs/main/configs.txt"',
-              '        )',
-              '        var rawText: String? = null',
-              '        for (u in urls) {',
-              '            try {',
-              '                val conn = java.net.URL(u).openConnection() as java.net.HttpURLConnection',
-              '                conn.connectTimeout = 4000',
-              '                conn.readTimeout = 4000',
-              '                conn.setRequestProperty("User-Agent", "AMN/3.1.8")',
-              '                if (conn.responseCode in 200..299) {',
-              '                    rawText = conn.inputStream.bufferedReader().use { it.readText() }',
-              '                    conn.disconnect()',
-              '                    if (!rawText.isNullOrBlank()) break',
-              '                }',
-              '                conn.disconnect()',
-              '            } catch (_: Exception) { }',
-              '        }',
-              '        val body = rawText?.trim() ?: return@withContext null',
-              '        val decoded = runCatching {',
-              '            android.util.Base64.decode(body, android.util.Base64.DEFAULT).decodeToString()',
-              '        }.getOrNull()?.takeIf { it.isNotBlank() } ?: body',
-              '        val links = dev.cluvex.zedsecure.domain.config.SubscriptionParser.extractLinks(decoded)',
-              '            .ifEmpty { dev.cluvex.zedsecure.domain.config.SubscriptionParser.extractLinks(body) }',
-              '        if (links.isEmpty()) return@withContext null',
-              '        val sample = links.shuffled().take(35).mapNotNull { link ->',
-              '            runCatching {',
-              '                dev.cluvex.zedsecure.domain.config.VpnProfile.fromLink(link = link, id = "amn_free_smart", addedAt = System.currentTimeMillis(), locked = true)',
-              '            }.getOrNull()',
-              '        }',
-              '        if (sample.isEmpty()) return@withContext null',
-              '        val executor = java.util.concurrent.Executors.newFixedThreadPool(12)',
-              '        val futures = sample.map { prof ->',
-              '            executor.submit(java.util.concurrent.Callable {',
-              '                val host = prof.address',
-              '                val port = prof.port',
-              '                if (host.isBlank() || port !in 1..65535) return@Callable null',
-              '                val start = System.currentTimeMillis()',
-              '                try {',
-              '                    java.net.Socket().use { sock ->',
-              '                        sock.connect(java.net.InetSocketAddress(host, port), 1200)',
-              '                    }',
-              '                    val ms = (System.currentTimeMillis() - start).toInt()',
-              '                    prof to ms',
-              '                } catch (_: Exception) { null }',
-              '            })',
-              '        }',
-              '        val results = mutableListOf<Pair<dev.cluvex.zedsecure.domain.config.VpnProfile, Int>>()',
-              '        for (f in futures) {',
-              '            try {',
-              '                val res = f.get(1400, java.util.concurrent.TimeUnit.MILLISECONDS)',
-              '                if (res != null) results.add(res)',
-              '            } catch (_: Exception) { }',
-              '        }',
-              '        executor.shutdownNow()',
-              '        val best = results.minByOrNull { it.second } ?: (sample.first() to 120)',
-              '        best.first.copy(',
-              '            id = "amn_free_smart",',
-              '            name = "⚡ کانفیگ رایگان هوشمند (" + best.second + "ms)",',
-              '            isLocked = true,',
-              '            lastPingMs = best.second',
-              '        )',
-              '    }',
-          ])
-          t_ma = t_ma.rstrip()
-          if t_ma.endswith("}"):
-              t_ma = t_ma[:-1] + extra_ma_helpers + "\n}\n"
-          write(p_ma, t_ma)
-
-          # 5) PixelHome.kt: Add PixelFreeRow
-          p_px = KT + "/home/PixelHome.kt"
-          t_px = read(p_px)
-          t_px = t_px.replace("    onBrowseConfigs: () -> Unit,", "    onBrowseConfigs: () -> Unit,\n    freeActive: Boolean = false,\n    onSelectFree: () -> Unit = {},", 1)
-
-          old_px_row = "\n".join([
-              "                    PixelServerRow(",
-              "                        name = activeConfigName,",
-              "                        detail = activeConfigDetail,",
-              "                        locked = activeLocked,",
-              "                        onClick = onBrowseConfigs,",
-              "                        modifier = Modifier.tourTarget(TourTargets.CONFIG_CARD),",
-              "                    )",
-          ])
-          new_px_row = "\n".join([
-              "                    PixelFreeRow(",
-              "                        selected = freeActive,",
-              "                        detail = if (freeActive) activeConfigName else null,",
-              "                        onClick = onSelectFree,",
-              "                        modifier = Modifier.tourTarget(\"free-row\"),",
-              "                    )",
-              "                    PixelServerRow(",
-              "                        name = if (freeActive) null else activeConfigName,",
-              "                        detail = if (freeActive) null else activeConfigDetail,",
-              "                        locked = false,",
-              "                        onClick = onBrowseConfigs,",
-              "                        modifier = Modifier.tourTarget(TourTargets.CONFIG_CARD),",
-              "                    )",
-          ])
-          t_px = t_px.replace(old_px_row, new_px_row, 1)
-
-          px_comp = "\n".join([
-              "",
-              "@Composable",
-              "private fun PixelFreeRow(",
-              "    selected: Boolean,",
-              "    detail: String?,",
-              "    onClick: () -> Unit,",
-              "    modifier: Modifier = Modifier,",
-              ") {",
-              "    val cs = MaterialTheme.colorScheme",
-              "    val source = remember { MutableInteractionSource() }",
-              "    val pressed by source.collectIsPressedAsState()",
-              "    val turn by animateFloatAsState(if (pressed || selected) 45f else 0f, MaterialTheme.motionScheme.fastSpatialSpec(), label = \"pixel-free-turn\")",
-              "    val container by animateColorAsState(if (selected) cs.primaryContainer else cs.surfaceContainerHigh, label = \"pixel-free-bg\")",
-              "    val content by animateColorAsState(if (selected) cs.onPrimaryContainer else cs.onSurface, label = \"pixel-free-fg\")",
-              "    val sub by animateColorAsState(if (selected) cs.onPrimaryContainer.copy(alpha = 0.78f) else cs.onSurfaceVariant, label = \"pixel-free-sub\")",
-              "    Surface(",
-              "        onClick = onClick,",
-              "        interactionSource = source,",
-              "        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp, bottomStart = 8.dp, bottomEnd = 8.dp),",
-              "        color = container,",
-              "        modifier = modifier.fillMaxWidth(),",
-              "    ) {",
-              "        Row(",
-              "            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 11.dp),",
-              "            verticalAlignment = Alignment.CenterVertically,",
-              "        ) {",
-              "            Box(Modifier.size(42.dp), contentAlignment = Alignment.Center) {",
-              "                Box(",
-              "                    Modifier",
-              "                        .matchParentSize()",
-              "                        .graphicsLayer { rotationZ = turn }",
-              "                        .clip(MaterialShapes.Cookie9Sided.toShape())",
-              "                        .background(if (selected) cs.primary else cs.secondaryContainer),",
-              "                )",
-              "                Icon(",
-              "                    painterResource(Res.drawable.ic_bolt),",
-              "                    contentDescription = null,",
-              "                    tint = if (selected) cs.onPrimary else cs.onSecondaryContainer,",
-              "                    modifier = Modifier.size(22.dp),",
-              "                )",
-              "            }",
-              "            Spacer(Modifier.width(14.dp))",
-              "            Column(Modifier.weight(1f)) {",
-              "                Text(",
-              "                    text = \"کانفیگ رایگان هوشمند\",",
-              "                    style = MaterialTheme.typography.titleMediumEmphasized,",
-              "                    color = content,",
-              "                    maxLines = 1,",
-              "                    overflow = TextOverflow.Ellipsis,",
-              "                )",
-              "                Text(",
-              "                    text = if (selected) (detail ?: \"فعال • دکمه اتصال بالا را بزنید\") else \"ضربه بزنید تا فعال شود (تست و اتصال خودکار)\",",
-              "                    style = MaterialTheme.typography.bodySmall,",
-              "                    color = sub,",
-              "                    maxLines = 1,",
-              "                    overflow = TextOverflow.Ellipsis,",
-              "                )",
-              "            }",
-              "            Spacer(Modifier.width(8.dp))",
-              "            Box(",
-              "                Modifier.size(32.dp).clip(CircleShape).background(if (selected) cs.primary else cs.onSurface.copy(alpha = 0.08f)),",
-              "                contentAlignment = Alignment.Center,",
-              "            ) {",
-              "                Icon(",
-              "                    painterResource(if (selected) Res.drawable.ic_check else Res.drawable.ic_bolt),",
-              "                    contentDescription = null,",
-              "                    tint = if (selected) cs.onPrimary else cs.onSurfaceVariant,",
-              "                    modifier = Modifier.size(18.dp),",
-              "                )",
-              "            }",
-              "        }",
-              "    }",
-              "}",
-          ])
-          write(p_px, t_px + "\n" + px_comp)
-
-          # 6) PortalHome.kt: Add PortalFreeTicket
-          p_ph = KT + "/home/PortalHome.kt"
-          t_ph = read(p_ph)
-          t_ph = t_ph.replace("    onBrowseConfigs: () -> Unit,", "    onBrowseConfigs: () -> Unit,\n    freeActive: Boolean = false,\n    onSelectFree: () -> Unit = {},", 1)
-
-          old_ph_ticket = "\n".join([
-              "                PortalTicket(",
-              "                    name = activeConfigName,",
-              "                    detail = activeConfigDetail,",
-              "                    locked = activeLocked,",
-              "                    onClick = onBrowseConfigs,",
-              "                    modifier = Modifier.padding(horizontal = 20.dp).tourTarget(TourTargets.CONFIG_CARD),",
-              "                )",
-          ])
-          new_ph_ticket = "\n".join([
-              "                PortalFreeTicket(",
-              "                    selected = freeActive,",
-              "                    detail = if (freeActive) activeConfigName else null,",
-              "                    onClick = onSelectFree,",
-              "                    modifier = Modifier.padding(horizontal = 20.dp).tourTarget(\"free-row\"),",
-              "                )",
-              "                Spacer(Modifier.height(6.dp))",
-              "                PortalTicket(",
-              "                    name = if (freeActive) null else activeConfigName,",
-              "                    detail = if (freeActive) null else activeConfigDetail,",
-              "                    locked = false,",
-              "                    onClick = onBrowseConfigs,",
-              "                    modifier = Modifier.padding(horizontal = 20.dp).tourTarget(TourTargets.CONFIG_CARD),",
-              "                )",
-          ])
-          t_ph = t_ph.replace(old_ph_ticket, new_ph_ticket, 1)
-
-          ph_comp = "\n".join([
-              "",
-              "@Composable",
-              "private fun PortalFreeTicket(",
-              "    selected: Boolean,",
-              "    detail: String?,",
-              "    onClick: () -> Unit,",
-              "    modifier: Modifier = Modifier,",
-              ") {",
-              "    val cs = MaterialTheme.colorScheme",
-              "    val source = remember { MutableInteractionSource() }",
-              "    val pressed by source.collectIsPressedAsState()",
-              "    val corner by animateDpAsState(if (pressed) 18.dp else 26.dp, MaterialTheme.motionScheme.fastSpatialSpec(), label = \"free-ticket-corner\")",
-              "    val turn by animateFloatAsState(if (pressed || selected) 60f else 0f, MaterialTheme.motionScheme.fastSpatialSpec(), label = \"free-ticket-turn\")",
-              "    val container by animateColorAsState(if (selected) cs.primaryContainer else cs.surfaceContainerHigh, label = \"free-ticket-bg\")",
-              "    val content by animateColorAsState(if (selected) cs.onPrimaryContainer else cs.onSurface, label = \"free-ticket-fg\")",
-              "    Surface(",
-              "        onClick = onClick,",
-              "        interactionSource = source,",
-              "        shape = RoundedCornerShape(corner),",
-              "        color = container,",
-              "        modifier = modifier.fillMaxWidth(),",
-              "    ) {",
-              "        Row(",
-              "            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),",
-              "            verticalAlignment = Alignment.CenterVertically,",
-              "        ) {",
-              "            Box(Modifier.size(42.dp), contentAlignment = Alignment.Center) {",
-              "                Box(",
-              "                    Modifier",
-              "                        .matchParentSize()",
-              "                        .graphicsLayer { rotationZ = turn }",
-              "                        .clip(MaterialShapes.Cookie9Sided.toShape())",
-              "                        .background(if (selected) cs.primary else cs.secondaryContainer),",
-              "                )",
-              "                Icon(",
-              "                    painterResource(Res.drawable.ic_bolt),",
-              "                    contentDescription = null,",
-              "                    tint = if (selected) cs.onPrimary else cs.onSecondaryContainer,",
-              "                    modifier = Modifier.size(21.dp),",
-              "                )",
-              "            }",
-              "            Spacer(Modifier.width(14.dp))",
-              "            Column(Modifier.weight(1f)) {",
-              "                Text(",
-              "                    text = \"کانفیگ رایگان هوشمند\",",
-              "                    style = MaterialTheme.typography.titleMediumEmphasized,",
-              "                    color = content,",
-              "                    maxLines = 1,",
-              "                    overflow = TextOverflow.Ellipsis,",
-              "                )",
-              "                Text(",
-              "                    text = if (selected) (detail ?: \"فعال • دکمه اتصال بالا را بزنید\") else \"ضربه بزنید تا فعال شود (تست و اتصال خودکار)\",",
-              "                    style = MaterialTheme.typography.bodySmall,",
-              "                    color = content.copy(alpha = 0.75f),",
-              "                    maxLines = 1,",
-              "                    overflow = TextOverflow.Ellipsis,",
-              "                )",
-              "            }",
-              "            Spacer(Modifier.width(8.dp))",
-              "            Box(",
-              "                Modifier.size(32.dp).clip(CircleShape).background(if (selected) cs.primary else content.copy(alpha = 0.08f)),",
-              "                contentAlignment = Alignment.Center,",
-              "            ) {",
-              "                Icon(",
-              "                    painterResource(if (selected) Res.drawable.ic_check else Res.drawable.ic_bolt),",
-              "                    contentDescription = null,",
-              "                    tint = if (selected) cs.onPrimary else content,",
-              "                    modifier = Modifier.size(18.dp),",
-              "                )",
-              "            }",
-              "        }",
-              "    }",
-              "}",
-          ])
-          write(p_ph, t_ph + "\n" + ph_comp)
-
-          # 7) HomeScreen.kt: Add OldFreeConfigCard
-          p_hs = KT + "/home/HomeScreen.kt"
-          t_hs = read(p_hs)
-          t_hs = t_hs.replace("    onBrowseConfigs: () -> Unit,", "    onBrowseConfigs: () -> Unit,\n    freeActive: Boolean = false,\n    onSelectFree: () -> Unit = {},", 1)
-          t_hs = t_hs.replace("onBrowseConfigs = onBrowseConfigs,", "onBrowseConfigs = onBrowseConfigs,\n                    freeActive = freeActive,\n                    onSelectFree = onSelectFree,", 2)
-
-          old_hs_card = "\n".join([
-              "                ActiveConfigCard(",
-              "                    modifier = Modifier.tourTarget(TourTargets.CONFIG_CARD),",
-              "                    name = activeConfigName,",
-              "                    detail = activeConfigDetail,",
-              "                    locked = activeLocked,",
-              "                    onClick = onBrowseConfigs,",
-              "                    personalization = personalization,",
-              "                )",
-          ])
-          new_hs_card = "\n".join([
-              "                OldFreeConfigCard(",
-              "                    selected = freeActive,",
-              "                    detail = if (freeActive) activeConfigName else null,",
-              "                    onClick = onSelectFree,",
-              "                    personalization = personalization,",
-              "                    modifier = Modifier.tourTarget(\"free-row\"),",
-              "                )",
-              "                Spacer(Modifier.height(if (compact) 6.dp else 8.dp))",
-              "                ActiveConfigCard(",
-              "                    modifier = Modifier.tourTarget(TourTargets.CONFIG_CARD),",
-              "                    name = if (freeActive) null else activeConfigName,",
-              "                    detail = if (freeActive) null else activeConfigDetail,",
-              "                    locked = false,",
-              "                    onClick = onBrowseConfigs,",
-              "                    personalization = personalization,",
-              "                )",
-          ])
-          t_hs = t_hs.replace(old_hs_card, new_hs_card, 1)
-
-          hs_comp = "\n".join([
-              "",
-              "@Composable",
-              "private fun OldFreeConfigCard(",
-              "    selected: Boolean,",
-              "    detail: String?,",
-              "    onClick: () -> Unit,",
-              "    personalization: Personalization = Personalization.Default,",
-              "    modifier: Modifier = Modifier,",
-              ") {",
-              "    val cs = MaterialTheme.colorScheme",
-              "    val bg = if (selected) (personalization.configCardColor ?: cs.primaryContainer) else cs.surfaceContainerHigh",
-              "    val fg = if (selected) (personalization.configCardTextColor ?: cs.onPrimaryContainer) else cs.onSurface",
-              "    Surface(",
-              "        onClick = onClick,",
-              "        shape = MaterialTheme.shapes.largeIncreased,",
-              "        color = bg,",
-              "        modifier = modifier.fillMaxWidth(),",
-              "    ) {",
-              "        Row(",
-              "            Modifier.fillMaxWidth().padding(start = 12.dp, end = 16.dp, top = 10.dp, bottom = 10.dp),",
-              "            verticalAlignment = Alignment.CenterVertically,",
-              "        ) {",
-              "            Box(",
-              "                modifier = Modifier",
-              "                    .size(40.dp)",
-              "                    .clip(MaterialShapes.Cookie9Sided.toShape())",
-              "                    .background(if (selected) cs.primary else cs.secondaryContainer),",
-              "                contentAlignment = Alignment.Center,",
-              "            ) {",
-              "                Icon(",
-              "                    painter = painterResource(Res.drawable.ic_bolt),",
-              "                    contentDescription = null,",
-              "                    tint = if (selected) cs.onPrimary else cs.onSecondaryContainer,",
-              "                    modifier = Modifier.size(20.dp),",
-              "                )",
-              "            }",
-              "            Spacer(Modifier.width(14.dp))",
-              "            Column(Modifier.weight(1f)) {",
-              "                Text(",
-              "                    text = \"کانفیگ رایگان هوشمند\",",
-              "                    style = MaterialTheme.typography.titleMedium,",
-              "                    fontWeight = FontWeight.SemiBold,",
-              "                    color = fg,",
-              "                    maxLines = 1,",
-              "                    overflow = TextOverflow.Ellipsis,",
-              "                )",
-              "                Text(",
-              "                    text = if (selected) (detail ?: \"فعال • دکمه اتصال را بزنید\") else \"ضربه بزنید تا فعال شود (تست و اتصال خودکار)\",",
-              "                    style = MaterialTheme.typography.bodySmall,",
-              "                    color = fg.copy(alpha = 0.75f),",
-              "                    maxLines = 1,",
-              "                    overflow = TextOverflow.Ellipsis,",
-              "                )",
-              "            }",
-              "            Icon(",
-              "                painter = painterResource(if (selected) Res.drawable.ic_check_circle else Res.drawable.ic_bolt),",
-              "                contentDescription = null,",
-              "                tint = if (selected) cs.primary else fg.copy(alpha = 0.6f),",
-              "            )",
-              "        }",
-              "    }",
-              "}",
-          ])
-          t_hs = t_hs.replace('                else -> Text(\n                    text = "Z",', '                else -> Text(\n                    text = "A",', 1)
-          write(p_hs, t_hs + "\n" + hs_comp)
-
-          # 8) MainScaffold.kt wiring
-          p_main = KT + "/MainScaffold.kt"
-          t_main = read(p_main)
-          old_browse = "\n".join([
-              "                    onBrowseConfigs = {",
-              "                        current = if (activeProfile?.isLocked == true) TopDestination.Vault",
-              "                        else TopDestination.Servers",
-              "                    },",
-          ])
-          new_browse = "\n".join([
-              "                    freeActive = activeId == \"amn_free_smart\",",
-              "                    onSelectFree = {",
-              "                        configRepository.selectFreeModePlaceholder()",
-              "                    },",
-              "                    onBrowseConfigs = {",
-              "                        current = TopDestination.Servers",
-              "                    },",
-          ])
-          write(p_main, t_main.replace(old_browse, new_browse, 1))
-
-          # 9) Settings & Branding
-          p_set = KT + "/settings/SettingsScreen.kt"
-          t_set = read(p_set)
-          t_set, _ = re.compile(r'\n[ ]*SettingsGroup\(modifier = Modifier\.tourTargetInPage\(TourTargets\.SETTINGS_SUPPORT\)\) \{\n[ ]*SettingsBannerRow\(\n.*?\) \{ onOpen\(SettingsPage\.Support\) \}\n[ ]*\}\n', re.S).subn('\n', t_set, count=1)
-          start = t_set.index('stringResource(Res.string.settings_about),\n            modifier = Modifier.tourTargetInPage(TourTargets.SETTINGS_ABOUT),')
-          gstart = t_set.index('{', start)
-          body_start = t_set.index('val fromPlay', gstart)
-          ver_row = t_set.index('SettingsMenuRow(\n                stringResource(Res.string.settings_about),\n                AppInfo.versionName,', body_start)
-          ver_end = t_set.index('{ onAbout() }', ver_row) + len('{ onAbout() }')
+          # 2b) About group: keep Check for Updates row + Created By Ali Mourdini + Support rows (without AboutSheet popup)
+          start = t.index('stringResource(Res.string.settings_about),\n            modifier = Modifier.tourTargetInPage(TourTargets.SETTINGS_ABOUT),')
+          gstart = t.index('{', start)
+          body_start = t.index('val fromPlay', gstart)
+          ver_row = t.index('SettingsMenuRow(\n                stringResource(Res.string.settings_about),\n                AppInfo.versionName,', body_start)
+          ver_end = t.index('{ onAbout() }', ver_row) + len('{ onAbout() }')
           new_rows = "\n".join([
               'val fromPlay = platform.distribution == Distribution.PlayStore',
               '            SettingsMenuRow(',
@@ -745,35 +225,303 @@ jobs:
               '                art = SettingsArts.Support,',
               '            ) { platform.openUri("https://t.me/A_Mourdini_N") }',
           ])
-          write(p_set, t_set[:body_start] + new_rows + t_set[ver_end:])
+          t = t[:body_start] + new_rows + t[ver_end:]
+          write(p, t)
 
-          write(KT + "/settings/AppDesignPicker.kt", read(KT + "/settings/AppDesignPicker.kt").replace('Text("Z", color = Color.White, style = MaterialTheme.typography.titleLargeEmphasized)', 'Text("A", color = Color.White, style = MaterialTheme.typography.titleLargeEmphasized)', 1))
-          write(KT + "/onboarding/Onboarding.kt", read(KT + "/onboarding/Onboarding.kt").replace('            Text(\n                "Z",\n                style = MaterialTheme.typography.displayLargeEmphasized,', '            Text(\n                "A",\n                style = MaterialTheme.typography.displayLargeEmphasized,', 1))
-          write(KT + "/settings/AppearancePickers.kt", read(KT + "/settings/AppearancePickers.kt").replace(') { Text("Z", color = on, fontSize = 18.sp, fontWeight = FontWeight.Bold) }', ') { Text("A", color = on, fontSize = 18.sp, fontWeight = FontWeight.Bold) }', 1))
+          # 2c) Change "Z" to "A" in AppDesignPicker.kt (Old design preview card)
+          p_design = KT + "/settings/AppDesignPicker.kt"
+          t_design = read(p_design)
+          old_z_design = 'Text("Z", color = Color.White, style = MaterialTheme.typography.titleLargeEmphasized)'
+          if old_z_design not in t_design:
+              fail("Z text not found in AppDesignPicker.kt")
+          write(p_design, t_design.replace(old_z_design, 'Text("A", color = Color.White, style = MaterialTheme.typography.titleLargeEmphasized)', 1))
 
+          # 2d) Change "Z" to "A" in Onboarding.kt (Tour offer step card)
+          p_onb = KT + "/onboarding/Onboarding.kt"
+          t_onb = read(p_onb)
+          old_z_onb = '            Text(\n                "Z",\n                style = MaterialTheme.typography.displayLargeEmphasized,'
+          new_a_onb = '            Text(\n                "A",\n                style = MaterialTheme.typography.displayLargeEmphasized,'
+          if old_z_onb not in t_onb:
+              fail("Z text not found in Onboarding.kt")
+          write(p_onb, t_onb.replace(old_z_onb, new_a_onb, 1))
+
+          # 2e) Change "Z" to "A" on HomeScreen.kt (Old design main connect button) and AppearancePickers.kt (Hero style preview)
+          p_home = KT + "/home/HomeScreen.kt"
+          t_home = read(p_home)
+          old_z_home = '                else -> Text(\n                    text = "Z",'
+          new_a_home = '                else -> Text(\n                    text = "A",'
+          if old_z_home not in t_home:
+              fail("Z text not found in HomeScreen.kt")
+          write(p_home, t_home.replace(old_z_home, new_a_home, 1))
+
+          p_pickers = KT + "/settings/AppearancePickers.kt"
+          t_pickers = read(p_pickers)
+          old_z_pickers = ') { Text("Z", color = on, fontSize = 18.sp, fontWeight = FontWeight.Bold) }'
+          new_a_pickers = ') { Text("A", color = on, fontSize = 18.sp, fontWeight = FontWeight.Bold) }'
+          if old_z_pickers not in t_pickers:
+              fail("Z text not found in AppearancePickers.kt")
+          write(p_pickers, t_pickers.replace(old_z_pickers, new_a_pickers, 1))
+
+          # 2f) Replace Z vector glyph with A in ic_zed_glyph.xml and ic_zed_mark.xml (used in PortalHome, etc.)
           a_path_512 = "M256,86 L432,426 L342,426 L306,350 L206,350 L170,426 L80,426 Z M228,284 L284,284 L256,218 Z"
-          write("shared/src/commonMain/composeResources/drawable/ic_zed_glyph.xml", f'<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="512" android:viewportHeight="512"><path android:fillColor="#FFFFFFFF" android:pathData="{a_path_512}" /></vector>')
-          write("shared/src/commonMain/composeResources/drawable/ic_zed_mark.xml", f'<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="512dp" android:height="512dp" android:viewportWidth="512" android:viewportHeight="512"><path android:fillColor="#FF00F5D4" android:pathData="M112,0 L400,0 A112,112 0 0 1 512,112 L512,400 A112,112 0 0 1 400,512 L112,512 A112,112 0 0 1 0,400 L0,112 A112,112 0 0 1 112,0 Z" /><path android:fillColor="#FF090D16" android:pathData="{a_path_512}" /></vector>')
+          p_glyph = "shared/src/commonMain/composeResources/drawable/ic_zed_glyph.xml"
+          write(p_glyph, "\n".join([
+              '<vector xmlns:android="http://schemas.android.com/apk/res/android"',
+              '    android:width="24dp"',
+              '    android:height="24dp"',
+              '    android:viewportWidth="512"',
+              '    android:viewportHeight="512">',
+              f'    <path android:fillColor="#FFFFFFFF" android:pathData="{a_path_512}" />',
+              '</vector>',
+          ]))
+          p_mark = "shared/src/commonMain/composeResources/drawable/ic_zed_mark.xml"
+          write(p_mark, "\n".join([
+              '<vector xmlns:android="http://schemas.android.com/apk/res/android"',
+              '    android:width="512dp"',
+              '    android:height="512dp"',
+              '    android:viewportWidth="512"',
+              '    android:viewportHeight="512">',
+              '    <path android:fillColor="#FF00F5D4" android:pathData="M112,0 L400,0 A112,112 0 0 1 512,112 L512,400 A112,112 0 0 1 400,512 L112,512 A112,112 0 0 1 0,400 L0,112 A112,112 0 0 1 112,0 Z" />',
+              f'    <path android:fillColor="#FF090D16" android:pathData="{a_path_512}" />',
+              '</vector>',
+          ]))
 
+          # 2g) Add "AMN Cyber" signature preset to ThemeProfiles.kt
           p_themes = KT + "/theme/ThemeProfiles.kt"
-          amn_profile = 'val ThemeProfiles: List<ThemeProfile> = listOf(\n    ThemeProfile(id = "amn_cyber", name = "AMN Cyber", accentIndex = 2, amoled = true, download = 0xFF00F5D4, upload = 0xFF38BDF8, downloadTile = 0xFF072624, uploadTile = 0xFF091E36, connect = 0xFF00F5D4, connected = 0xFF2563EB, tapHint = 0xFF99F6E4, serverCard = 0xFF0B1528, serverActive = 0xFF00F5D4, configCard = 0xFF0D1B33, configCardText = 0xFFECFEFF),'
-          write(p_themes, read(p_themes).replace('val ThemeProfiles: List<ThemeProfile> = listOf(', amn_profile, 1))
+          t_themes = read(p_themes)
+          amn_profile = "\n".join([
+              'val ThemeProfiles: List<ThemeProfile> = listOf(',
+              '    ThemeProfile(',
+              '        id = "amn_cyber",',
+              '        name = "AMN Cyber",',
+              '        accentIndex = 2,',
+              '        amoled = true,',
+              '        download = 0xFF00F5D4,',
+              '        upload = 0xFF38BDF8,',
+              '        downloadTile = 0xFF072624,',
+              '        uploadTile = 0xFF091E36,',
+              '        connect = 0xFF00F5D4,',
+              '        connected = 0xFF2563EB,',
+              '        tapHint = 0xFF99F6E4,',
+              '        serverCard = 0xFF0B1528,',
+              '        serverActive = 0xFF00F5D4,',
+              '        configCard = 0xFF0D1B33,',
+              '        configCardText = 0xFFECFEFF,',
+              '    ),',
+          ])
+          if 'val ThemeProfiles: List<ThemeProfile> = listOf(' not in t_themes:
+              fail("ThemeProfiles list not found")
+          write(p_themes, t_themes.replace('val ThemeProfiles: List<ThemeProfile> = listOf(', amn_profile, 1))
 
-          p_model = "shared/src/commonMain/kotlin/dev/cluvex/zedsecure/domain/model/AppSettings.kt"
-          write(p_model, read(p_model).replace('    val autoUpdateSubscriptions: Boolean = false,\n    val subscriptionUpdateIntervalHours: Int = 12,\n    val autoTestAfterUpdate: Boolean = false,\n    val autoRemoveInvalidAfterTest: Boolean = false,\n    val autoSortAfterTest: Boolean = false,', '    val autoUpdateSubscriptions: Boolean = true,\n    val subscriptionUpdateIntervalHours: Int = 1,\n    val autoTestAfterUpdate: Boolean = true,\n    val autoRemoveInvalidAfterTest: Boolean = false,\n    val autoSortAfterTest: Boolean = true,', 1))
+          # 2h) Enable auto-update subscriptions (every 1h), auto-test, and auto-sort by default
+          p_settings_model = "shared/src/commonMain/kotlin/dev/cluvex/zedsecure/domain/model/AppSettings.kt"
+          t_model = read(p_settings_model)
+          old_sub_defaults = "\n".join([
+              '    val autoUpdateSubscriptions: Boolean = false,',
+              '    val subscriptionUpdateIntervalHours: Int = 12,',
+              '    val autoTestAfterUpdate: Boolean = false,',
+              '    val autoRemoveInvalidAfterTest: Boolean = false,',
+              '    val autoSortAfterTest: Boolean = false,',
+          ])
+          new_sub_defaults = "\n".join([
+              '    val autoUpdateSubscriptions: Boolean = true,',
+              '    val subscriptionUpdateIntervalHours: Int = 1,',
+              '    val autoTestAfterUpdate: Boolean = true,',
+              '    val autoRemoveInvalidAfterTest: Boolean = false,',
+              '    val autoSortAfterTest: Boolean = true,',
+          ])
+          if old_sub_defaults not in t_model:
+              fail("subscription defaults block not found in AppSettings.kt")
+          write(p_settings_model, t_model.replace(old_sub_defaults, new_sub_defaults, 1))
 
           p_repo = "app/src/main/java/dev/cluvex/zedsecure/data/settings/SettingsRepository.kt"
-          write(p_repo, read(p_repo).replace('        val d = AppSettings(useZepTun = true, directDns = "localhost")', '        val d = AppSettings(useZepTun = true, directDns = "localhost")\n        if (!prefs.getBoolean("amn_sub_defaults_v1", false)) {\n            prefs.edit().putBoolean("auto_sub", true).putInt("sub_interval", 1).putBoolean("auto_test_after_update", true).putBoolean("auto_sort_after_test", true).putBoolean("amn_sub_defaults_v1", true).apply()\n        }', 1))
+          t_repo = read(p_repo)
+          old_repo_init = '        val d = AppSettings(useZepTun = true, directDns = "localhost")'
+          new_repo_init = "\n".join([
+              '        val d = AppSettings(useZepTun = true, directDns = "localhost")',
+              '        if (!prefs.getBoolean("amn_sub_defaults_v1", false)) {',
+              '            prefs.edit()',
+              '                .putBoolean("auto_sub", true)',
+              '                .putInt("sub_interval", 1)',
+              '                .putBoolean("auto_test_after_update", true)',
+              '                .putBoolean("auto_sort_after_test", true)',
+              '                .putBoolean("amn_sub_defaults_v1", true)',
+              '                .apply()',
+              '        }',
+          ])
+          if old_repo_init not in t_repo:
+              fail("SettingsRepository init line not found")
+          write(p_repo, t_repo.replace(old_repo_init, new_repo_init, 1))
+
+          # 2i) Connect GitHub Auto-Update Checker & Main Screen Popup to AMN Releases
+          p_upd = "shared/src/commonMain/kotlin/dev/cluvex/zedsecure/data/update/UpdateChecker.kt"
+          t_upd = read(p_upd)
+          old_apk_lookup = "\n".join([
+              '        val apk = if (abis.isEmpty()) null else {',
+              '            (abis.map { "ZedSecure-$version-$it.apk" } + "ZedSecure-$version-universal.apk")',
+              '                .firstNotNullOfOrNull { assets[it] }',
+              '        }',
+          ])
+          new_apk_lookup = "\n".join([
+              '        val apk = abis.firstNotNullOfOrNull { abi ->',
+              '            assets.entries.firstOrNull { (name, _) ->',
+              '                name.endsWith(".apk", ignoreCase = true) && name.contains(abi, ignoreCase = true)',
+              '            }?.value',
+              '        } ?: assets.entries.firstOrNull { (name, _) -> name.endsWith(".apk", ignoreCase = true) }?.value',
+          ])
+          if old_apk_lookup not in t_upd:
+              fail("apk lookup not found in UpdateChecker.kt")
+          t_upd = t_upd.replace(old_apk_lookup, new_apk_lookup, 1)
+
+          old_notes = "\n".join([
+              '        val start = markdown.indexOf(WHATS_NEW)',
+              '        if (start < 0) return ""',
+              '        val section = markdown.substring(start + WHATS_NEW.length).substringBefore("\\n<sub>").substringBefore("\\n### ")',
+          ])
+          new_notes = "\n".join([
+              '        val start = markdown.indexOf(WHATS_NEW)',
+              '        val section = if (start >= 0) {',
+              '            markdown.substring(start + WHATS_NEW.length).substringBefore("\\n<sub>").substringBefore("\\n### ")',
+              '        } else {',
+              '            markdown.substringBefore("\\n<sub>")',
+              '        }',
+          ])
+          if old_notes not in t_upd:
+              fail("releaseNotesFrom block not found in UpdateChecker.kt")
+          t_upd = t_upd.replace(old_notes, new_notes, 1)
+
+          t_upd = t_upd.replace(
+              "const val UPDATE_CHECK_INTERVAL_MS = 12L * 60 * 60 * 1000",
+              "const val UPDATE_CHECK_INTERVAL_MS = 15L * 60 * 1000",
+              1
+          )
+          write(p_upd, t_upd)
+
+          p_nudge = KT + "/update/NudgeHost.kt"
+          t_nudge = read(p_nudge)
+          old_nudge = "\n".join([
+              '    LaunchedEffect(settings.lastUpdateCheckMs) {',
+              '        val now = currentTimeMillis()',
+              '        if (settings.lastUpdateCheckMs == 0L) {',
+              '            onUpdateSettings { it.copy(lastUpdateCheckMs = now) }',
+              '            return@LaunchedEffect',
+              '        }',
+              '        if (now - settings.lastUpdateCheckMs < NudgePolicy.UPDATE_CHECK_INTERVAL_MS) return@LaunchedEffect',
+              '',
+              '        onUpdateSettings { it.copy(lastUpdateCheckMs = now) }',
+              '        val socks = if (VpnManager.status.value.state == ConnectionState.Connected) {',
+              '            VpnManager.activeSocksPort',
+              '        } else {',
+              '            null',
+              '        }',
+              '        val info = UpdateChecker.fetchLatest(',
+              '            platform.distribution,',
+              '            platform.deviceAbis,',
+              '            socks,',
+              '            settings.language.tag ?: "en",',
+              '        ) ?: return@LaunchedEffect',
+          ])
+          new_nudge = "\n".join([
+              '    LaunchedEffect(status.state == ConnectionState.Connected) {',
+              '        val now = currentTimeMillis()',
+              '        if (settings.lastUpdateCheckMs != 0L && now - settings.lastUpdateCheckMs < NudgePolicy.UPDATE_CHECK_INTERVAL_MS) return@LaunchedEffect',
+              '',
+              '        val socks = if (VpnManager.status.value.state == ConnectionState.Connected) {',
+              '            VpnManager.activeSocksPort',
+              '        } else {',
+              '            null',
+              '        }',
+              '        val info = UpdateChecker.fetchLatest(',
+              '            platform.distribution,',
+              '            platform.deviceAbis,',
+              '            socks,',
+              '            settings.language.tag ?: "en",',
+              '        ) ?: return@LaunchedEffect',
+              '        onUpdateSettings { it.copy(lastUpdateCheckMs = now) }',
+          ])
+          if old_nudge not in t_nudge:
+              fail("LaunchedEffect block not found in NudgeHost.kt")
+          write(p_nudge, t_nudge.replace(old_nudge, new_nudge, 1))
+
+          # 3) Drop the tour step that pointed at the removed banner
+          p = KT + "/onboarding/TourSteps.kt"
+          t = read(p)
+          pat = re.compile(
+              r'\n[ ]*TourStep\(\n[ ]*target = TourTargets\.SETTINGS_SUPPORT,\n.*?\n[ ]*\),\n', re.S)
+          t, c = pat.subn('\n', t, count=1)
+          if c != 1:
+              fail("tour support step not found")
+          write(p, t)
+          print("AMN UI patch applied OK")
+          PYEOF
+
+      - name: 5c. Remove Vault tab and finish AMN branding
+        run: |
+          python3 - << 'PYEOF'
+          from pathlib import Path
+          import sys
+
+          def patch(path, old, new, label, count=1):
+              p = Path(path)
+              if not p.exists():
+                  raise SystemExit(f"AMN patch failed: missing {path}")
+              text = p.read_text(encoding="utf-8")
+              actual = text.count(old)
+              if actual < count:
+                  raise SystemExit(f"AMN patch failed: {label} (expected at least {count}, found {actual})")
+              p.write_text(text.replace(old, new, count), encoding="utf-8")
+
+          nav = "shared/src/commonMain/kotlin/dev/cluvex/zedsecure/ui/navigation/NavBar.kt"
+          patch(nav, "TopDestination.entries.forEach { dest ->",
+                "TopDestination.entries.filter { it != TopDestination.Vault }.forEach { dest ->",
+                "hide Vault from navigation", count=4)
+
+          main = "shared/src/commonMain/kotlin/dev/cluvex/zedsecure/ui/MainScaffold.kt"
+          patch(main, "onImported = { current = TopDestination.Vault }",
+                "onImported = { current = TopDestination.Servers }", "route imported configs to Servers")
+          patch(main, "current = if (activeProfile?.isLocked == true) TopDestination.Vault\n                        else TopDestination.Servers",
+                "current = TopDestination.Servers", "remove hidden Vault browse route")
 
           hero = "shared/src/commonMain/kotlin/dev/cluvex/zedsecure/ui/settings/SettingsHero.kt"
-          old_hero = '        Icon(\n            painterResource(Res.drawable.ic_zed_glyph),\n            contentDescription = null,\n            tint = cs.onPrimary,\n            modifier = Modifier.size(58.dp),\n        )'
-          new_hero = '        Text(\n            text = "AMN",\n            color = cs.onPrimary,\n            fontSize = MaterialTheme.typography.titleLarge.fontSize,\n            fontWeight = androidx.compose.ui.text.font.FontWeight.Black,\n            maxLines = 1,\n        )'
-          write(hero, read(hero).replace(old_hero, new_hero, 1))
+          old = "\n".join([
+              "        Icon(",
+              "            painterResource(Res.drawable.ic_zed_glyph),",
+              "            contentDescription = null,",
+              "            tint = cs.onPrimary,",
+              "            modifier = Modifier.size(58.dp),",
+              "        )",
+          ])
+          new = "\n".join([
+              "        Text(",
+              '            text = "AMN",',
+              "            color = cs.onPrimary,",
+              "            fontSize = MaterialTheme.typography.titleLarge.fontSize,",
+              "            fontWeight = androidx.compose.ui.text.font.FontWeight.Black,",
+              "            maxLines = 1,",
+              "        )",
+          ])
+          patch(hero, old, new, "replace Settings Z mark with AMN")
 
           icon = Path("app/src/main/res/drawable/ic_tile_zed.xml")
-          icon.write_text('<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24"><path android:fillColor="#FFFFFFFF" android:pathData="M12,2.5 L22,21.5 L17.2,21.5 L15.2,17.5 L8.8,17.5 L6.8,21.5 L2,21.5 Z M10.2,13.8 L13.8,13.8 L12,10.2 Z" /></vector>', encoding="utf-8")
+          if not icon.exists():
+              raise SystemExit("AMN patch failed: notification icon file missing")
+          icon.write_text("\n".join([
+              '<vector xmlns:android="http://schemas.android.com/apk/res/android"',
+              '    android:width="24dp" android:height="24dp"',
+              '    android:viewportWidth="24" android:viewportHeight="24">',
+              '    <path android:fillColor="#FFFFFFFF"',
+              '      android:pathData="M12,2.5 L22,21.5 L17.2,21.5 L15.2,17.5 L8.8,17.5 L6.8,21.5 L2,21.5 Z M10.2,13.8 L13.8,13.8 L12,10.2 Z" />',
+              '</vector>',
+          ]), encoding="utf-8")
 
-          print("AMN UI successfully patched!")
+          for base in (Path("shared/src/commonMain/composeResources"), Path("app/src/main/res")):
+              for p in base.glob("values*/strings.xml"):
+                  text = p.read_text(encoding="utf-8")
+                  import re
+                  updated = re.sub(r'>([^<]*?)ZedSecure([^<]*?)<', lambda m: '>' + m.group(1) + 'AMN' + m.group(2) + '<', text, flags=re.IGNORECASE)
+                  if updated != text:
+                      p.write_text(updated, encoding="utf-8")
+          print("AMN branding and Vault navigation patch applied")
           PYEOF
 
       - name: 6. Generate AMN Logo with Exact Standard Dimensions
@@ -820,24 +568,41 @@ jobs:
                           pass
           EOF
 
-      - name: 7. Build Release APKs
+      - name: 7. Build Release APKs with Retry
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon
+          for i in 1 2 3; do
+            ./gradlew assembleRelease --no-daemon && break || {
+              echo "Retrying gradle build ($i)..."
+              sleep 10
+            }
+          done
 
-      - name: 8. Sign APKs with Official Android SDK Build-Tools
+      - name: 8. Sign APKs with Persistent AMN Keystore (Allows Updating Without Uninstalling)
         env:
-          APP_VER: ${{ inputs.app_version || '3.1.8' }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MY_REPO: ${{ github.repository }}
+          APP_VER: ${{ inputs.app_version || '3.1.6' }}
         run: |
-          keytool -genkeypair -v \
-            -keystore amn-release.jks \
-            -alias amn_key \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -storepass AMNSecure2026! \
-            -keypass AMNSecure2026! \
-            -dname "CN=AMN, OU=Security, O=AMN, L=Tehran, S=Tehran, C=IR"
+          if ! gh release download amn-keystore-vault -p "amn-release.jks" --repo "$MY_REPO" 2>/dev/null; then
+            echo "Generating permanent AMN Keystore for the first time..."
+            keytool -genkeypair -v \
+              -keystore amn-release.jks \
+              -alias amn_key \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -storepass AMNSecure2026! \
+              -keypass AMNSecure2026! \
+              -dname "CN=AMN, OU=Security, O=AMN, L=Tehran, S=Tehran, C=IR"
+            gh release create amn-keystore-vault amn-release.jks \
+              --repo "$MY_REPO" \
+              --title "AMN Permanent Keystore (Do Not Delete)" \
+              --notes "Permanent signing key so future updates install over existing app without uninstalling." \
+              --prerelease || true
+          else
+            echo "Reusing existing permanent AMN Keystore from amn-keystore-vault..."
+          fi
 
           mkdir -p output_apks
           ZIPALIGN=$(find "$ANDROID_HOME/build-tools" -name "zipalign" | sort -V | tail -n 1)
@@ -861,12 +626,12 @@ jobs:
       - name: 9. Publish APKs to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: AMN-v${{ inputs.app_version || '3.1.8' }}
-          name: "AMN Security v${{ inputs.app_version || '3.1.8' }}"
+          tag_name: AMN-v${{ inputs.app_version || '3.1.6' }}
+          name: "AMN Security v${{ inputs.app_version || '3.1.6' }}"
           make_latest: true
           body: |
             ### What's new
-            ${{ inputs.release_notes || '• افزودن ردیف کانفیگ رایگان هوشمند در صفحه اصلی (تست و اتصال خودکار در پس‌زمینه)\n• چرخش دکمه اتصال تا یافتن سریع‌ترین سرور\n• فروشگاه اشتراک اختصاصی VIP (هر گیگ ۶,۰۰۰ تومان)' }}
+            ${{ inputs.release_notes || '• بهبود سرعت و پایداری اتصال و بهینه‌سازی رابط کاربری اختصاصی AMN' }}
 
             ---
             - **پشتیبانی تلگرام:** [@A_Mourdini_N](https://t.me/A_Mourdini_N)
