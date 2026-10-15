@@ -4,13 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       app_version:
-        description: 'App Version (e.g., 3.1.6 or 3.1.7 for updates)'
+        description: 'App Version (e.g., 3.1.8 for updates)'
         required: false
-        default: '3.1.7'
+        default: '3.1.8'
       release_notes:
         description: 'Release Notes (shown in the in-app update dialog)'
         required: false
-        default: '• افزودن بخش اتصال هوشمند رایگان (انتخاب خودکار بهترین سرور در پس‌زمینه)\n• افزودن فروشگاه اشتراک اختصاصی VIP (هر گیگ ۶,۰۰۰ تومان)\n• بروزرسانی راهنمای تعاملی برنامه'
+        default: '• افزودن ردیف کانفیگ رایگان هوشمند زیر دکمه اتصال در صفحه اصلی (سازگار با تمام طراحی‌ها و رنگ‌ها)\n• تست خودکار در پس‌زمینه همراه با چرخش دکمه اتصال تا یافتن سریع‌ترین سرور\n• فروشگاه اختصاصی VIP در نوار پایین (هر گیگ ۶,۰۰۰ تومان)'
 
 permissions:
   contents: write
@@ -59,14 +59,14 @@ jobs:
       - name: 5. Safe Rebrand to AMN & Dynamic Version Setup
         env:
           MY_REPO: ${{ github.repository }}
-          APP_VER: ${{ inputs.app_version || '3.1.7' }}
+          APP_VER: ${{ inputs.app_version || '3.1.8' }}
           RUN_NUM: ${{ github.run_number }}
         run: |
           python3 - << 'EOF'
           import os, re
 
           my_repo = os.environ.get("MY_REPO", "alimourdini1/AMN")
-          app_ver = os.environ.get("APP_VER", "3.1.7").strip() or "3.1.7"
+          app_ver = os.environ.get("APP_VER", "3.1.8").strip() or "3.1.8"
           run_num = int(os.environ.get("RUN_NUM", "1"))
           ver_code = 35 + run_num
 
@@ -150,7 +150,7 @@ jobs:
                               pass
           EOF
 
-      - name: 5b. AMN UI Changes, Free Smart Connect, VIP Store & Updated Tour
+      - name: 5b. AMN UI Changes, Home Free Config Row, Spinning Connect & VIP Store
         run: |
           python3 - << 'PYEOF'
           import re, sys, glob
@@ -170,7 +170,7 @@ jobs:
 
           KT = "shared/src/commonMain/kotlin/dev/cluvex/zedsecure/ui"
 
-          # 1) Update strings.xml (App name, Nav labels for Free & Shop, and Tour texts)
+          # 1) Update strings.xml (App name, Nav label for VIP Store, and Tour texts)
           for p in glob.glob("shared/src/commonMain/composeResources/values*/strings.xml"):
               t = read(p)
               is_fa = "values-fa" in p
@@ -181,11 +181,6 @@ jobs:
                   t
               )
               t = re.sub(
-                  r'(<string name="vault_experimental_badge">)[^<]*(</string>)',
-                  r'\1رایگان\2' if is_fa else r'\1Free\2',
-                  t
-              )
-              t = re.sub(
                   r'>([^<]*?)ZedSecure([^<]*?)<',
                   lambda m: '>' + m.group(1) + 'AMN' + m.group(2) + '<',
                   t,
@@ -193,15 +188,105 @@ jobs:
               )
               write(p, t)
 
-          # 2) Add upsertHiddenFreeProfile helper to ConfigRepository.kt
+          # 2) Add Free Config selection & background scanner to ConfigRepository.kt
           p_cr = "shared/src/commonMain/kotlin/dev/cluvex/zedsecure/data/config/ConfigRepository.kt"
           t_cr = read(p_cr)
           cr_anchor = "    fun setActive(id: String?) {"
           cr_inject = "\n".join([
-              '    fun upsertHiddenFreeProfile(profile: VpnProfile) {',
-              '        _profiles.value = _profiles.value.filterNot { it.id == "amn_free_smart" } + profile',
+              '    fun selectFreeModePlaceholder() {',
+              '        val existing = _profiles.value.firstOrNull { it.id == "amn_free_smart" }',
+              '        val placeholder = existing ?: VpnProfile(',
+              '            id = "amn_free_smart",',
+              '            name = "⚡ کانفیگ رایگان هوشمند",',
+              '            protocol = "AUTO",',
+              '            address = "auto",',
+              '            port = 443,',
+              '            transportLabel = "AMN Smart Free",',
+              '            source = ProfileSource.Link("vless://00000000-0000-0000-0000-000000000000@127.0.0.1:443?security=none&type=tcp#AMN-Free"),',
+              '            addedAt = currentTimeMillis(),',
+              '            isLocked = true,',
+              '        )',
+              '        if (existing == null) {',
+              '            _profiles.value = _profiles.value + placeholder',
+              '            persistProfiles()',
+              '        }',
+              '        setActive("amn_free_smart")',
+              '    }',
+              '',
+              '    suspend fun scanAndSelectBestFreeProfile(): VpnProfile = withContext(Dispatchers.IO) {',
+              '        val urls = listOf(',
+              '            "https://raw.githubusercontent.com/patterniha/Free-Configs/main/configs.txt",',
+              '            "https://cdn.jsdelivr.net/gh/patterniha/Free-Configs@main/configs.txt",',
+              '            "https://ghproxy.net/https://raw.githubusercontent.com/patterniha/Free-Configs/main/configs.txt",',
+              '        )',
+              '        var rawBody: String? = null',
+              '        for (u in urls) {',
+              '            val r = runCatching { httpGetResponse(u, userAgent = "AMN/3.1.8").body }.getOrNull()',
+              '            if (!r.isNullOrBlank()) {',
+              '                rawBody = r',
+              '                break',
+              '            }',
+              '        }',
+              '        val text = rawBody ?: error("خطا در دریافت سرورهای رایگان؛ اتصال اینترنت را بررسی کنید")',
+              '        val decoded = runCatching { ConfigParser.decodeBase64Utf8(text.trim()) }.getOrNull()?.takeIf { it.isNotBlank() } ?: text',
+              '        val links = SubscriptionParser.extractLinks(decoded).ifEmpty { SubscriptionParser.extractLinks(text) }',
+              '        if (links.isEmpty()) error("سرور رایگانی یافت نشد")',
+              '',
+              '        val candidates = links.shuffled().take(55).mapNotNull { lnk ->',
+              '            runCatching {',
+              '                VpnProfile.fromLink(link = lnk, id = "tmp", addedAt = 0L, locked = true)',
+              '            }.getOrNull()',
+              '        }',
+              '        if (candidates.isEmpty()) error("کانفیگ معتبری یافت نشد")',
+              '',
+              '        val tcpSem = kotlinx.coroutines.sync.Semaphore(20)',
+              '        val tcpPassed = kotlinx.coroutines.coroutineScope {',
+              '            candidates.map { prof ->',
+              '                kotlinx.coroutines.async {',
+              '                    val ms = tcpSem.acquire().let {',
+              '                        try {',
+              '                            if (prof.address.isNotBlank() && prof.port in 1..65535) {',
+              '                                dev.cluvex.zedsecure.platform.tcpConnectMillis(prof.address, prof.port, 1400)',
+              '                            } else -1L',
+              '                        } finally {',
+              '                            tcpSem.release()',
+              '                        }',
+              '                    }',
+              '                    if (ms > 0) prof to ms.toInt() else null',
+              '                }',
+              '            }.mapNotNull { it.await() }.sortedBy { it.second }',
+              '        }',
+              '        val finalists = tcpPassed.take(10)',
+              '        if (finalists.isEmpty()) error("سرورهای رایگان پاسخ ندادند؛ دوباره تلاش کنید")',
+              '',
+              '        val realSem = kotlinx.coroutines.sync.Semaphore(5)',
+              '        val realPassed = kotlinx.coroutines.coroutineScope {',
+              '            finalists.map { (prof, _) ->',
+              '                kotlinx.coroutines.async {',
+              '                    val realMs = realSem.acquire().let {',
+              '                        try {',
+              '                            runCatching { dev.cluvex.zedsecure.data.net.PingService.realDelay(prof) }.getOrDefault(-1L)',
+              '                        } finally {',
+              '                            realSem.release()',
+              '                        }',
+              '                    }',
+              '                    if (realMs > 0) prof to realMs.toInt() else null',
+              '                }',
+              '            }.mapNotNull { it.await() }.sortedBy { it.second }',
+              '        }',
+              '        val (winner, bestMs) = realPassed.firstOrNull() ?: finalists.first()',
+              '        val finalProfile = winner.copy(',
+              '            id = "amn_free_smart",',
+              '            name = "⚡ کانفیگ رایگان هوشمند (${bestMs}ms)",',
+              '            isLocked = true,',
+              '            addedAt = currentTimeMillis(),',
+              '            lastPingMs = bestMs,',
+              '            note = null,',
+              '        )',
+              '        _profiles.value = _profiles.value.filterNot { it.id == "amn_free_smart" } + finalProfile',
               '        persistProfiles()',
-              '        setActive(profile.id)',
+              '        setActive("amn_free_smart")',
+              '        finalProfile',
               '    }',
               '',
               '    fun setActive(id: String?) {',
@@ -210,13 +295,12 @@ jobs:
               fail("setActive not found in ConfigRepository.kt")
           write(p_cr, t_cr.replace(cr_anchor, cr_inject, 1))
 
-          # 3) Update TopDestination.kt to include Free (رایگان) and Vault (فروشگاه)
+          # 3) Update TopDestination.kt so bottom nav has ONLY 4 tabs: Home, Servers, Vault (VIP Store), Settings
           p_top = KT + "/navigation/TopDestination.kt"
           write(p_top, "\n".join([
               'package dev.cluvex.zedsecure.ui.navigation',
               '',
               'import dev.cluvex.zedsecure.shared.resources.Res',
-              'import dev.cluvex.zedsecure.shared.resources.ic_bolt',
               'import dev.cluvex.zedsecure.shared.resources.ic_dns',
               'import dev.cluvex.zedsecure.shared.resources.ic_home',
               'import dev.cluvex.zedsecure.shared.resources.ic_settings',
@@ -225,7 +309,6 @@ jobs:
               'import dev.cluvex.zedsecure.shared.resources.nav_locked',
               'import dev.cluvex.zedsecure.shared.resources.nav_servers',
               'import dev.cluvex.zedsecure.shared.resources.nav_settings',
-              'import dev.cluvex.zedsecure.shared.resources.vault_experimental_badge',
               'import org.jetbrains.compose.resources.DrawableResource',
               'import org.jetbrains.compose.resources.StringResource',
               '',
@@ -235,13 +318,446 @@ jobs:
               ') {',
               '    Home(Res.string.nav_home, Res.drawable.ic_home),',
               '    Servers(Res.string.nav_servers, Res.drawable.ic_dns),',
-              '    Free(Res.string.vault_experimental_badge, Res.drawable.ic_bolt),',
               '    Vault(Res.string.nav_locked, Res.drawable.ic_star),',
               '    Settings(Res.string.nav_settings, Res.drawable.ic_settings),',
               '}',
           ]))
 
-          # 4) Replace VaultScreen.kt with FreeConnectScreen + AMN VIP Store (VaultScreen)
+          # 4) Update MainActivity.kt so pressing Connect when Free Config is active spins the button while scanning in background!
+          p_ma = "app/src/main/java/dev/cluvex/zedsecure/MainActivity.kt"
+          t_ma = read(p_ma)
+          old_toggle = "\n".join([
+              '        if (planning) return',
+              '        val profile = configRepository.activeProfile()',
+              '        if (profile == null) {',
+              '            toast(getString(R.string.select_config_first))',
+              '            return',
+              '        }',
+              '        planning = true',
+              '        lifecycleScope.launch {',
+              '            val plan = try {',
+              '                withContext(Dispatchers.IO) { planner.plan(profile) }',
+              '            } finally {',
+              '                planning = false',
+              '            }',
+          ])
+          new_toggle = "\n".join([
+              '        if (planning) return',
+              '        val initialProfile = configRepository.activeProfile()',
+              '        if (initialProfile == null) {',
+              '            toast(getString(R.string.select_config_first))',
+              '            return',
+              '        }',
+              '        planning = true',
+              '        lifecycleScope.launch {',
+              '            val profile = if (initialProfile.id == "amn_free_smart") {',
+              '                VpnManager.onStarting("⚡ در حال یافتن بهترین سرور رایگان...")',
+              '                val found = runCatching { configRepository.scanAndSelectBestFreeProfile() }',
+              '                found.getOrElse { e ->',
+              '                    planning = false',
+              '                    VpnManager.onDisconnected()',
+              '                    toast(e.message ?: "خطا در یافتن سرور رایگان")',
+              '                    return@launch',
+              '                }',
+              '            } else {',
+              '                initialProfile',
+              '            }',
+              '            val plan = try {',
+              '                withContext(Dispatchers.IO) { planner.plan(profile) }',
+              '            } finally {',
+              '                planning = false',
+              '            }',
+          ])
+          if old_toggle not in t_ma:
+              fail("toggleConnection block not found in MainActivity.kt")
+          write(p_ma, t_ma.replace(old_toggle, new_toggle, 1))
+
+          # 5) Add FreeConfigRow composable to HomeScreen.kt, PixelHome.kt, and PortalHome.kt (adaptive to all 3 designs & colors!)
+          # 5a) PixelHome.kt: add PixelFreeRow right above PixelServerRow
+          p_px = KT + "/home/PixelHome.kt"
+          t_px = read(p_px)
+          old_px_sig = "    onBrowseConfigs: () -> Unit,"
+          new_px_sig = "    onBrowseConfigs: () -> Unit,\n    freeActive: Boolean = false,\n    onSelectFree: () -> Unit = {},"
+          if old_px_sig not in t_px:
+              fail("onBrowseConfigs sig not found in PixelHome.kt")
+          t_px = t_px.replace(old_px_sig, new_px_sig, 1)
+
+          old_px_row = "\n".join([
+              "                    PixelServerRow(",
+              "                        name = activeConfigName,",
+              "                        detail = activeConfigDetail,",
+              "                        locked = activeLocked,",
+              "                        onClick = onBrowseConfigs,",
+              "                        modifier = Modifier.tourTarget(TourTargets.CONFIG_CARD),",
+              "                    )",
+          ])
+          new_px_row = "\n".join([
+              "                    PixelFreeRow(",
+              "                        selected = freeActive,",
+              "                        detail = if (freeActive) activeConfigName else null,",
+              "                        onClick = onSelectFree,",
+              "                        modifier = Modifier.tourTarget(\"free-row\"),",
+              "                    )",
+              "                    PixelServerRow(",
+              "                        name = if (freeActive) null else activeConfigName,",
+              "                        detail = if (freeActive) null else activeConfigDetail,",
+              "                        locked = false,",
+              "                        onClick = onBrowseConfigs,",
+              "                        modifier = Modifier.tourTarget(TourTargets.CONFIG_CARD),",
+              "                    )",
+          ])
+          if old_px_row not in t_px:
+              fail("PixelServerRow call not found in PixelHome.kt")
+          t_px = t_px.replace(old_px_row, new_px_row, 1)
+
+          px_composable = "\n".join([
+              "",
+              "@Composable",
+              "private fun PixelFreeRow(",
+              "    selected: Boolean,",
+              "    detail: String?,",
+              "    onClick: () -> Unit,",
+              "    modifier: Modifier = Modifier,",
+              ") {",
+              "    val cs = MaterialTheme.colorScheme",
+              "    val source = remember { MutableInteractionSource() }",
+              "    val pressed by source.collectIsPressedAsState()",
+              "    val turn by animateFloatAsState(if (pressed || selected) 45f else 0f, MaterialTheme.motionScheme.fastSpatialSpec(), label = \"pixel-free-turn\")",
+              "    val container by animateColorAsState(if (selected) cs.primaryContainer else cs.surfaceContainerHigh, label = \"pixel-free-bg\")",
+              "    val content by animateColorAsState(if (selected) cs.onPrimaryContainer else cs.onSurface, label = \"pixel-free-fg\")",
+              "    val sub by animateColorAsState(if (selected) cs.onPrimaryContainer.copy(alpha = 0.78f) else cs.onSurfaceVariant, label = \"pixel-free-sub\")",
+              "    Surface(",
+              "        onClick = onClick,",
+              "        interactionSource = source,",
+              "        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp, bottomStart = 8.dp, bottomEnd = 8.dp),",
+              "        color = container,",
+              "        modifier = modifier.fillMaxWidth(),",
+              "    ) {",
+              "        Row(",
+              "            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 11.dp),",
+              "            verticalAlignment = Alignment.CenterVertically,",
+              "        ) {",
+              "            Box(Modifier.size(42.dp), contentAlignment = Alignment.Center) {",
+              "                Box(",
+              "                    Modifier",
+              "                        .matchParentSize()",
+              "                        .graphicsLayer { rotationZ = turn }",
+              "                        .clip(MaterialShapes.Cookie9Sided.toShape())",
+              "                        .background(if (selected) cs.primary else cs.secondaryContainer),",
+              "                )",
+              "                Icon(",
+              "                    painterResource(Res.drawable.ic_bolt),",
+              "                    contentDescription = null,",
+              "                    tint = if (selected) cs.onPrimary else cs.onSecondaryContainer,",
+              "                    modifier = Modifier.size(22.dp),",
+              "                )",
+              "            }",
+              "            Spacer(Modifier.width(14.dp))",
+              "            Column(Modifier.weight(1f)) {",
+              "                Text(",
+              "                    text = \"کانفیگ رایگان هوشمند\",",
+              "                    style = MaterialTheme.typography.titleMediumEmphasized,",
+              "                    color = content,",
+              "                    maxLines = 1,",
+              "                    overflow = TextOverflow.Ellipsis,",
+              "                )",
+              "                Text(",
+              "                    text = if (selected) (detail ?: \"فعال • دکمه اتصال بالا را بزنید\") else \"ضربه بزنید تا فعال شود (تست و اتصال خودکار)\",",
+              "                    style = MaterialTheme.typography.bodySmall,",
+              "                    color = sub,",
+              "                    maxLines = 1,",
+              "                    overflow = TextOverflow.Ellipsis,",
+              "                )",
+              "            }",
+              "            Spacer(Modifier.width(8.dp))",
+              "            Box(",
+              "                Modifier.size(32.dp).clip(CircleShape).background(if (selected) cs.primary else cs.onSurface.copy(alpha = 0.08f)),",
+              "                contentAlignment = Alignment.Center,",
+              "            ) {",
+              "                Icon(",
+              "                    painterResource(if (selected) Res.drawable.ic_check else Res.drawable.ic_bolt),",
+              "                    contentDescription = null,",
+              "                    tint = if (selected) cs.onPrimary else cs.onSurfaceVariant,",
+              "                    modifier = Modifier.size(18.dp),",
+              "                )",
+              "            }",
+              "        }",
+              "    }",
+              "}",
+          ])
+          t_px = t_px + "\n" + px_composable
+          write(p_px, t_px)
+
+          # 5b) PortalHome.kt: add PortalFreeTicket right above PortalTicket
+          p_ph = KT + "/home/PortalHome.kt"
+          t_ph = read(p_ph)
+          old_ph_sig = "    onBrowseConfigs: () -> Unit,"
+          new_ph_sig = "    onBrowseConfigs: () -> Unit,\n    freeActive: Boolean = false,\n    onSelectFree: () -> Unit = {},"
+          if old_ph_sig not in t_ph:
+              fail("onBrowseConfigs sig not found in PortalHome.kt")
+          t_ph = t_ph.replace(old_ph_sig, new_ph_sig, 1)
+
+          old_ph_ticket = "\n".join([
+              "                PortalTicket(",
+              "                    name = activeConfigName,",
+              "                    detail = activeConfigDetail,",
+              "                    locked = activeLocked,",
+              "                    onClick = onBrowseConfigs,",
+              "                    modifier = Modifier.padding(horizontal = 20.dp).tourTarget(TourTargets.CONFIG_CARD),",
+              "                )",
+          ])
+          new_ph_ticket = "\n".join([
+              "                PortalFreeTicket(",
+              "                    selected = freeActive,",
+              "                    detail = if (freeActive) activeConfigName else null,",
+              "                    onClick = onSelectFree,",
+              "                    modifier = Modifier.padding(horizontal = 20.dp).tourTarget(\"free-row\"),",
+              "                )",
+              "                Spacer(Modifier.height(6.dp))",
+              "                PortalTicket(",
+              "                    name = if (freeActive) null else activeConfigName,",
+              "                    detail = if (freeActive) null else activeConfigDetail,",
+              "                    locked = false,",
+              "                    onClick = onBrowseConfigs,",
+              "                    modifier = Modifier.padding(horizontal = 20.dp).tourTarget(TourTargets.CONFIG_CARD),",
+              "                )",
+          ])
+          if old_ph_ticket not in t_ph:
+              fail("PortalTicket call not found in PortalHome.kt")
+          t_ph = t_ph.replace(old_ph_ticket, new_ph_ticket, 1)
+
+          ph_composable = "\n".join([
+              "",
+              "@Composable",
+              "private fun PortalFreeTicket(",
+              "    selected: Boolean,",
+              "    detail: String?,",
+              "    onClick: () -> Unit,",
+              "    modifier: Modifier = Modifier,",
+              ") {",
+              "    val cs = MaterialTheme.colorScheme",
+              "    val source = remember { MutableInteractionSource() }",
+              "    val pressed by source.collectIsPressedAsState()",
+              "    val corner by animateDpAsState(if (pressed) 18.dp else 26.dp, MaterialTheme.motionScheme.fastSpatialSpec(), label = \"free-ticket-corner\")",
+              "    val turn by animateFloatAsState(if (pressed || selected) 60f else 0f, MaterialTheme.motionScheme.fastSpatialSpec(), label = \"free-ticket-turn\")",
+              "    val container by animateColorAsState(if (selected) cs.primaryContainer else cs.surfaceContainerHigh, label = \"free-ticket-bg\")",
+              "    val content by animateColorAsState(if (selected) cs.onPrimaryContainer else cs.onSurface, label = \"free-ticket-fg\")",
+              "    Surface(",
+              "        onClick = onClick,",
+              "        interactionSource = source,",
+              "        shape = RoundedCornerShape(corner),",
+              "        color = container,",
+              "        modifier = modifier.fillMaxWidth(),",
+              "    ) {",
+              "        Row(",
+              "            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),",
+              "            verticalAlignment = Alignment.CenterVertically,",
+              "        ) {",
+              "            Box(Modifier.size(42.dp), contentAlignment = Alignment.Center) {",
+              "                Box(",
+              "                    Modifier",
+              "                        .matchParentSize()",
+              "                        .graphicsLayer { rotationZ = turn }",
+              "                        .clip(MaterialShapes.Cookie9Sided.toShape())",
+              "                        .background(if (selected) cs.primary else cs.secondaryContainer),",
+              "                )",
+              "                Icon(",
+              "                    painterResource(Res.drawable.ic_bolt),",
+              "                    contentDescription = null,",
+              "                    tint = if (selected) cs.onPrimary else cs.onSecondaryContainer,",
+              "                    modifier = Modifier.size(21.dp),",
+              "                )",
+              "            }",
+              "            Spacer(Modifier.width(14.dp))",
+              "            Column(Modifier.weight(1f)) {",
+              "                Text(",
+              "                    text = \"کانفیگ رایگان هوشمند\",",
+              "                    style = MaterialTheme.typography.titleMediumEmphasized,",
+              "                    color = content,",
+              "                    maxLines = 1,",
+              "                    overflow = TextOverflow.Ellipsis,",
+              "                )",
+              "                Text(",
+              "                    text = if (selected) (detail ?: \"فعال • دکمه اتصال بالا را بزنید\") else \"ضربه بزنید تا فعال شود (تست و اتصال خودکار)\",",
+              "                    style = MaterialTheme.typography.bodySmall,",
+              "                    color = content.copy(alpha = 0.75f),",
+              "                    maxLines = 1,",
+              "                    overflow = TextOverflow.Ellipsis,",
+              "                )",
+              "            }",
+              "            Spacer(Modifier.width(8.dp))",
+              "            Box(",
+              "                Modifier.size(32.dp).clip(CircleShape).background(if (selected) cs.primary else content.copy(alpha = 0.08f)),",
+              "                contentAlignment = Alignment.Center,",
+              "            ) {",
+              "                Icon(",
+              "                    painterResource(if (selected) Res.drawable.ic_check else Res.drawable.ic_bolt),",
+              "                    contentDescription = null,",
+              "                    tint = if (selected) cs.onPrimary else content,",
+              "                    modifier = Modifier.size(18.dp),",
+              "                )",
+              "            }",
+              "        }",
+              "    }",
+              "}",
+          ])
+          t_ph = t_ph + "\n" + ph_composable
+          write(p_ph, t_ph)
+
+          # 5c) HomeScreen.kt: pass freeActive & onSelectFree to PixelHome, PortalHome, and add OldFreeConfigCard in Old design
+          p_hs = KT + "/home/HomeScreen.kt"
+          t_hs = read(p_hs)
+          old_hs_sig = "    onBrowseConfigs: () -> Unit,"
+          new_hs_sig = "    onBrowseConfigs: () -> Unit,\n    freeActive: Boolean = false,\n    onSelectFree: () -> Unit = {},"
+          if old_hs_sig not in t_hs:
+              fail("onBrowseConfigs sig not found in HomeScreen.kt")
+          t_hs = t_hs.replace(old_hs_sig, new_hs_sig, 1)
+
+          t_hs = t_hs.replace(
+              "onBrowseConfigs = onBrowseConfigs,",
+              "onBrowseConfigs = onBrowseConfigs,\n                    freeActive = freeActive,\n                    onSelectFree = onSelectFree,",
+              2
+          )
+
+          old_hs_card = "\n".join([
+              "                ActiveConfigCard(",
+              "                    modifier = Modifier.tourTarget(TourTargets.CONFIG_CARD),",
+              "                    name = activeConfigName,",
+              "                    detail = activeConfigDetail,",
+              "                    locked = activeLocked,",
+              "                    onClick = onBrowseConfigs,",
+              "                    personalization = personalization,",
+              "                )",
+          ])
+          new_hs_card = "\n".join([
+              "                OldFreeConfigCard(",
+              "                    selected = freeActive,",
+              "                    detail = if (freeActive) activeConfigName else null,",
+              "                    onClick = onSelectFree,",
+              "                    personalization = personalization,",
+              "                    modifier = Modifier.tourTarget(\"free-row\"),",
+              "                )",
+              "                Spacer(Modifier.height(if (compact) 6.dp else 8.dp))",
+              "                ActiveConfigCard(",
+              "                    modifier = Modifier.tourTarget(TourTargets.CONFIG_CARD),",
+              "                    name = if (freeActive) null else activeConfigName,",
+              "                    detail = if (freeActive) null else activeConfigDetail,",
+              "                    locked = false,",
+              "                    onClick = onBrowseConfigs,",
+              "                    personalization = personalization,",
+              "                )",
+          ])
+          if old_hs_card not in t_hs:
+              fail("ActiveConfigCard call not found in HomeScreen.kt")
+          t_hs = t_hs.replace(old_hs_card, new_hs_card, 1)
+
+          hs_composable = "\n".join([
+              "",
+              "@Composable",
+              "private fun OldFreeConfigCard(",
+              "    selected: Boolean,",
+              "    detail: String?,",
+              "    onClick: () -> Unit,",
+              "    personalization: Personalization = Personalization.Default,",
+              "    modifier: Modifier = Modifier,",
+              ") {",
+              "    val cs = MaterialTheme.colorScheme",
+              "    val bg = if (selected) (personalization.configCardColor ?: cs.primaryContainer) else cs.surfaceContainerHigh",
+              "    val fg = if (selected) (personalization.configCardTextColor ?: cs.onPrimaryContainer) else cs.onSurface",
+              "    Surface(",
+              "        onClick = onClick,",
+              "        shape = MaterialTheme.shapes.largeIncreased,",
+              "        color = bg,",
+              "        modifier = modifier.fillMaxWidth(),",
+              "    ) {",
+              "        Row(",
+              "            Modifier.fillMaxWidth().padding(start = 12.dp, end = 16.dp, top = 10.dp, bottom = 10.dp),",
+              "            verticalAlignment = Alignment.CenterVertically,",
+              "        ) {",
+              "            Box(",
+              "                modifier = Modifier",
+              "                    .size(40.dp)",
+              "                    .clip(MaterialShapes.Cookie9Sided.toShape())",
+              "                    .background(if (selected) cs.primary else cs.secondaryContainer),",
+              "                contentAlignment = Alignment.Center,",
+              "            ) {",
+              "                Icon(",
+              "                    painter = painterResource(Res.drawable.ic_bolt),",
+              "                    contentDescription = null,",
+              "                    tint = if (selected) cs.onPrimary else cs.onSecondaryContainer,",
+              "                    modifier = Modifier.size(20.dp),",
+              "                )",
+              "            }",
+              "            Spacer(Modifier.width(14.dp))",
+              "            Column(Modifier.weight(1f)) {",
+              "                Text(",
+              "                    text = \"کانفیگ رایگان هوشمند\",",
+              "                    style = MaterialTheme.typography.titleMedium,",
+              "                    fontWeight = FontWeight.SemiBold,",
+              "                    color = fg,",
+              "                    maxLines = 1,",
+              "                    overflow = TextOverflow.Ellipsis,",
+              "                )",
+              "                Text(",
+              "                    text = if (selected) (detail ?: \"فعال • دکمه اتصال را بزنید\") else \"ضربه بزنید تا فعال شود (تست و اتصال خودکار)\",",
+              "                    style = MaterialTheme.typography.bodySmall,",
+              "                    color = fg.copy(alpha = 0.75f),",
+              "                    maxLines = 1,",
+              "                    overflow = TextOverflow.Ellipsis,",
+              "                )",
+              "            }",
+              "            Icon(",
+              "                painter = painterResource(if (selected) Res.drawable.ic_check_circle else Res.drawable.ic_bolt),",
+              "                contentDescription = null,",
+              "                tint = if (selected) cs.primary else fg.copy(alpha = 0.6f),",
+              "            )",
+              "        }",
+              "    }",
+              "}",
+          ])
+          t_hs = t_hs.replace('                else -> Text(\n                    text = "Z",', '                else -> Text(\n                    text = "A",', 1)
+          t_hs = t_hs + "\n" + hs_composable
+          write(p_hs, t_hs)
+
+          # 6) Update MainScaffold.kt to pass freeActive & onSelectFree to HomeScreen and TourDestinations
+          p_main = KT + "/MainScaffold.kt"
+          t_main = read(p_main)
+          old_browse = "\n".join([
+              "                    onBrowseConfigs = {",
+              "                        current = if (activeProfile?.isLocked == true) TopDestination.Vault",
+              "                        else TopDestination.Servers",
+              "                    },",
+          ])
+          new_browse = "\n".join([
+              "                    freeActive = activeId == \"amn_free_smart\",",
+              "                    onSelectFree = {",
+              "                        configRepository.selectFreeModePlaceholder()",
+              "                    },",
+              "                    onBrowseConfigs = {",
+              "                        current = TopDestination.Servers",
+              "                    },",
+          ])
+          if old_browse not in t_main:
+              fail("old_browse block not found in MainScaffold.kt")
+          t_main = t_main.replace(old_browse, new_browse, 1)
+
+          old_tour_map = "\n".join([
+              "                dev.cluvex.zedsecure.ui.onboarding.TourDestination.Home -> TopDestination.Home",
+              "                dev.cluvex.zedsecure.ui.onboarding.TourDestination.Servers -> TopDestination.Servers",
+              "                dev.cluvex.zedsecure.ui.onboarding.TourDestination.Settings -> TopDestination.Settings",
+          ])
+          new_tour_map = "\n".join([
+              "                dev.cluvex.zedsecure.ui.onboarding.TourDestination.Home -> TopDestination.Home",
+              "                dev.cluvex.zedsecure.ui.onboarding.TourDestination.Servers -> TopDestination.Servers",
+              "                dev.cluvex.zedsecure.ui.onboarding.TourDestination.Shop -> TopDestination.Vault",
+              "                dev.cluvex.zedsecure.ui.onboarding.TourDestination.Settings -> TopDestination.Settings",
+          ])
+          if old_tour_map not in t_main:
+              fail("tour destination map not found in MainScaffold.kt")
+          t_main = t_main.replace(old_tour_map, new_tour_map, 1)
+          write(p_main, t_main)
+
+          # 7) Replace VaultScreen.kt with AMN VIP Store (6,000 Toman/GB)
           p_vault = KT + "/vault/VaultScreen.kt"
           write(p_vault, "\n".join([
               '@file:OptIn(',
@@ -251,12 +767,8 @@ jobs:
               '',
               'package dev.cluvex.zedsecure.ui.vault',
               '',
-              'import androidx.compose.animation.AnimatedContent',
-              'import androidx.compose.animation.animateColorAsState',
-              'import androidx.compose.foundation.background',
               'import androidx.compose.foundation.border',
               'import androidx.compose.foundation.layout.Arrangement',
-              'import androidx.compose.foundation.layout.Box',
               'import androidx.compose.foundation.layout.Column',
               'import androidx.compose.foundation.layout.PaddingValues',
               'import androidx.compose.foundation.layout.Row',
@@ -272,39 +784,18 @@ jobs:
               'import androidx.compose.foundation.shape.RoundedCornerShape',
               'import androidx.compose.foundation.verticalScroll',
               'import androidx.compose.material3.Button',
-              'import androidx.compose.material3.CircularProgressIndicator',
-              'import androidx.compose.material3.FilledTonalButton',
               'import androidx.compose.material3.Icon',
-              'import androidx.compose.material3.LinearProgressIndicator',
               'import androidx.compose.material3.MaterialTheme',
               'import androidx.compose.material3.Surface',
               'import androidx.compose.material3.Text',
               'import androidx.compose.runtime.Composable',
-              'import androidx.compose.runtime.getValue',
-              'import androidx.compose.runtime.mutableIntStateOf',
-              'import androidx.compose.runtime.mutableStateOf',
-              'import androidx.compose.runtime.remember',
-              'import androidx.compose.runtime.rememberCoroutineScope',
-              'import androidx.compose.runtime.saveable.rememberSaveable',
-              'import androidx.compose.runtime.setValue',
               'import androidx.compose.ui.Alignment',
               'import androidx.compose.ui.Modifier',
-              'import androidx.compose.ui.draw.clip',
               'import androidx.compose.ui.graphics.Color',
               'import androidx.compose.ui.text.font.FontWeight',
               'import androidx.compose.ui.text.style.TextAlign',
               'import androidx.compose.ui.unit.dp',
-              'import androidx.lifecycle.compose.collectAsStateWithLifecycle',
-              'import dev.cluvex.zedsecure.core.VpnManager',
               'import dev.cluvex.zedsecure.data.config.ConfigRepository',
-              'import dev.cluvex.zedsecure.data.net.PingService',
-              'import dev.cluvex.zedsecure.domain.config.ConfigParser',
-              'import dev.cluvex.zedsecure.domain.config.SubscriptionParser',
-              'import dev.cluvex.zedsecure.domain.config.VpnProfile',
-              'import dev.cluvex.zedsecure.domain.model.ConnectionState',
-              'import dev.cluvex.zedsecure.platform.currentTimeMillis',
-              'import dev.cluvex.zedsecure.platform.httpGetResponse',
-              'import dev.cluvex.zedsecure.platform.tcpConnectMillis',
               'import dev.cluvex.zedsecure.shared.resources.Res',
               'import dev.cluvex.zedsecure.shared.resources.*',
               'import dev.cluvex.zedsecure.ui.components.MorphingBlob',
@@ -312,350 +803,7 @@ jobs:
               'import dev.cluvex.zedsecure.ui.onboarding.tourTarget',
               'import dev.cluvex.zedsecure.ui.platform.LocalPlatform',
               'import dev.cluvex.zedsecure.ui.theme.ZedGradients',
-              'import kotlinx.coroutines.Dispatchers',
-              'import kotlinx.coroutines.async',
-              'import kotlinx.coroutines.awaitAll',
-              'import kotlinx.coroutines.coroutineScope',
-              'import kotlinx.coroutines.launch',
-              'import kotlinx.coroutines.sync.Semaphore',
-              'import kotlinx.coroutines.sync.withPermit',
-              'import kotlinx.coroutines.withContext',
               'import org.jetbrains.compose.resources.painterResource',
-              '',
-              'private val FREE_SUB_URLS = listOf(',
-              '    "https://raw.githubusercontent.com/patterniha/Free-Configs/main/configs.txt",',
-              '    "https://cdn.jsdelivr.net/gh/patterniha/Free-Configs@main/configs.txt",',
-              '    "https://ghproxy.net/https://raw.githubusercontent.com/patterniha/Free-Configs/main/configs.txt",',
-              ')',
-              '',
-              '@Composable',
-              'fun FreeConnectScreen(',
-              '    repository: ConfigRepository,',
-              '    contentPadding: PaddingValues,',
-              '    onConnectSmart: () -> Unit,',
-              '    onDisconnect: () -> Unit,',
-              '    onGoToShop: () -> Unit,',
-              '    modifier: Modifier = Modifier,',
-              ') {',
-              '    val platform = LocalPlatform.current',
-              '    val scope = rememberCoroutineScope()',
-              '    val vpnStatus by VpnManager.status.collectAsStateWithLifecycle()',
-              '    val activeId by repository.activeId.collectAsStateWithLifecycle()',
-              '    val profiles by repository.profiles.collectAsStateWithLifecycle()',
-              '    val freeProfile = remember(profiles) { profiles.firstOrNull { it.id == "amn_free_smart" } }',
-              '    val isFreeConnected = vpnStatus.state == ConnectionState.Connected && activeId == "amn_free_smart"',
-              '',
-              '    var scanning by rememberSaveable { mutableStateOf(false) }',
-              '    var statusText by rememberSaveable {',
-              '        mutableStateOf("آماده اسکن هوشمند و اتصال خودکار به بهترین سرور رایگان")',
-              '    }',
-              '    var progressStep by rememberSaveable { mutableIntStateOf(0) }',
-              '',
-              '    fun startSmartFreeConnect() {',
-              '        if (scanning) return',
-              '        scanning = true',
-              '        progressStep = 1',
-              '        statusText = "در حال دریافت لیست سرورهای رایگان از مخزن ابری..."',
-              '        scope.launch {',
-              '            val result = withContext(Dispatchers.IO) {',
-              '                runCatching {',
-              '                    val socks = VpnManager.activeSocksPort?.takeIf {',
-              '                        it > 0 && VpnManager.status.value.state == ConnectionState.Connected',
-              '                    }',
-              '                    var rawBody: String? = null',
-              '                    for (u in FREE_SUB_URLS) {',
-              '                        val r = if (socks != null) {',
-              '                            runCatching { httpGetResponse(u, userAgent = "AMN/3.1.7", socksPort = socks).body }.getOrNull()',
-              '                                ?: runCatching { httpGetResponse(u, userAgent = "AMN/3.1.7").body }.getOrNull()',
-              '                        } else {',
-              '                            runCatching { httpGetResponse(u, userAgent = "AMN/3.1.7").body }.getOrNull()',
-              '                        }',
-              '                        if (!r.isNullOrBlank()) {',
-              '                            rawBody = r',
-              '                            break',
-              '                        }',
-              '                    }',
-              '                    val text = rawBody ?: error("خطا در دریافت سرورها؛ اینترنت خود را بررسی کنید")',
-              '                    val decoded = runCatching { ConfigParser.decodeBase64Utf8(text.trim()) }.getOrNull()?.takeIf { it.isNotBlank() } ?: text',
-              '                    val links = SubscriptionParser.extractLinks(decoded).ifEmpty { SubscriptionParser.extractLinks(text) }',
-              '                    if (links.isEmpty()) error("سرور فعالی در منبع یافت نشد")',
-              '',
-              '                    withContext(Dispatchers.Main) {',
-              '                        progressStep = 2',
-              '                        statusText = "در حال تست پینگ و کیفیت ${links.size} سرور در پس‌زمینه..."',
-              '                    }',
-              '',
-              '                    val candidates = links.shuffled().take(55).mapNotNull { lnk ->',
-              '                        runCatching {',
-              '                            VpnProfile.fromLink(link = lnk, id = "tmp", addedAt = 0L, locked = true)',
-              '                        }.getOrNull()',
-              '                    }',
-              '                    if (candidates.isEmpty()) error("کانفیگ قابل استفاده‌ای یافت نشد")',
-              '',
-              '                    val tcpSem = Semaphore(20)',
-              '                    val tcpPassed = coroutineScope {',
-              '                        candidates.map { prof ->',
-              '                            async {',
-              '                                val ms = tcpSem.withPermit {',
-              '                                    if (prof.address.isNotBlank() && prof.port in 1..65535) {',
-              '                                        tcpConnectMillis(prof.address, prof.port, 1400)',
-              '                                    } else -1L',
-              '                                }',
-              '                                if (ms > 0) prof to ms.toInt() else null',
-              '                            }',
-              '                        }.awaitAll().filterNotNull().sortedBy { it.second }',
-              '                    }',
-              '',
-              '                    val finalists = tcpPassed.take(10)',
-              '                    if (finalists.isEmpty()) error("هیچ‌کدام از سرورهای رایگان به پینگ پاسخ ندادند")',
-              '',
-              '                    withContext(Dispatchers.Main) {',
-              '                        progressStep = 3',
-              '                        statusText = "در حال انتخاب سریع‌ترین سرور و برقراری اتصال..."',
-              '                    }',
-              '',
-              '                    val realSem = Semaphore(5)',
-              '                    val realPassed = coroutineScope {',
-              '                        finalists.map { (prof, tcpMs) ->',
-              '                            async {',
-              '                                val realMs = realSem.withPermit {',
-              '                                    runCatching { PingService.realDelay(prof) }.getOrDefault(-1L)',
-              '                                }',
-              '                                if (realMs > 0) prof to realMs.toInt() else null',
-              '                            }',
-              '                        }.awaitAll().filterNotNull().sortedBy { it.second }',
-              '                    }',
-              '',
-              '                    val (winner, bestMs) = realPassed.firstOrNull() ?: finalists.first()',
-              '                    val finalProfile = winner.copy(',
-              '                        id = "amn_free_smart",',
-              '                        name = "⚡ اتصال هوشمند رایگان AMN",',
-              '                        isLocked = true,',
-              '                        addedAt = currentTimeMillis(),',
-              '                        lastPingMs = bestMs,',
-              '                        note = "متصل به بهترین سرور رایگان (پینگ: ${bestMs}ms) • انتخاب خودکار در پس‌زمینه",',
-              '                    )',
-              '                    finalProfile to bestMs',
-              '                }',
-              '            }',
-              '            scanning = false',
-              '            progressStep = 0',
-              '            result.onSuccess { (winnerProfile, bestMs) ->',
-              '                repository.upsertHiddenFreeProfile(winnerProfile)',
-              '                statusText = "بهترین سرور با پینگ $bestMs میلی‌ثانیه انتخاب و فعال شد!"',
-              '                platform.toast("سریع‌ترین سرور رایگان ($bestMs ms) انتخاب شد")',
-              '                onConnectSmart()',
-              '            }.onFailure { e ->',
-              '                statusText = e.message ?: "خطا در یافتن سرور رایگان؛ دوباره تلاش کنید"',
-              '                platform.toast(statusText)',
-              '            }',
-              '        }',
-              '    }',
-              '',
-              '    Column(',
-              '        modifier = modifier',
-              '            .fillMaxSize()',
-              '            .verticalScroll(rememberScrollState())',
-              '            .padding(contentPadding),',
-              '        horizontalAlignment = Alignment.CenterHorizontally,',
-              '    ) {',
-              '        Spacer(Modifier.height(8.dp))',
-              '        PageHeader(',
-              '            title = "کانفیگ رایگان هوشمند",',
-              '            subtitle = "اتصال خودکار به بهترین سرور در پس‌زمینه بدون شلوغی لیست سرورها",',
-              '        )',
-              '',
-              '        Spacer(Modifier.height(12.dp))',
-              '',
-              '        Surface(',
-              '            shape = RoundedCornerShape(28.dp),',
-              '            color = MaterialTheme.colorScheme.surfaceContainerHigh,',
-              '            modifier = Modifier',
-              '                .fillMaxWidth()',
-              '                .padding(horizontal = 20.dp)',
-              '                .tourTarget("free-card"),',
-              '        ) {',
-              '            Column(',
-              '                Modifier.fillMaxWidth().padding(24.dp),',
-              '                horizontalAlignment = Alignment.CenterHorizontally,',
-              '                verticalArrangement = Arrangement.spacedBy(14.dp),',
-              '            ) {',
-              '                MorphingBlob(',
-              '                    progress = if (isFreeConnected) 1f else if (scanning) 0.7f else 0.35f,',
-              '                    brush = if (isFreeConnected) ZedGradients.connected else ZedGradients.idle,',
-              '                    modifier = Modifier.size(116.dp),',
-              '                ) {',
-              '                    if (scanning) {',
-              '                        CircularProgressIndicator(',
-              '                            color = Color.White,',
-              '                            strokeWidth = 3.dp,',
-              '                            modifier = Modifier.size(44.dp),',
-              '                        )',
-              '                    } else {',
-              '                        Icon(',
-              '                            painterResource(if (isFreeConnected) Res.drawable.ic_check_circle else Res.drawable.ic_bolt),',
-              '                            contentDescription = null,',
-              '                            tint = Color.White,',
-              '                            modifier = Modifier.size(48.dp),',
-              '                        )',
-              '                    }',
-              '                }',
-              '',
-              '                Text(',
-              '                    text = when {',
-              '                        scanning -> "در حال جستجو و تست خودکار..."',
-              '                        isFreeConnected -> "متصل به سرور هوشمند رایگان"',
-              '                        else -> "اتصال هوشمند تک‌کلیکی"',
-              '                    },',
-              '                    style = MaterialTheme.typography.headlineSmall,',
-              '                    fontWeight = FontWeight.Bold,',
-              '                    color = MaterialTheme.colorScheme.onSurface,',
-              '                    textAlign = TextAlign.Center,',
-              '                )',
-              '',
-              '                Text(',
-              '                    text = statusText,',
-              '                    style = MaterialTheme.typography.bodyMedium,',
-              '                    color = MaterialTheme.colorScheme.onSurfaceVariant,',
-              '                    textAlign = TextAlign.Center,',
-              '                )',
-              '',
-              '                if (freeProfile?.lastPingMs != null && !scanning) {',
-              '                    Surface(',
-              '                        shape = CircleShape,',
-              '                        color = MaterialTheme.colorScheme.primaryContainer,',
-              '                    ) {',
-              '                        Text(',
-              '                            text = "پینگ سرور انتخاب‌شده: ${freeProfile.lastPingMs} ms",',
-              '                            style = MaterialTheme.typography.labelLarge,',
-              '                            fontWeight = FontWeight.SemiBold,',
-              '                            color = MaterialTheme.colorScheme.onPrimaryContainer,',
-              '                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),',
-              '                        )',
-              '                    }',
-              '                }',
-              '',
-              '                if (scanning) {',
-              '                    LinearProgressIndicator(',
-              '                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp).clip(CircleShape),',
-              '                    )',
-              '                }',
-              '',
-              '                Spacer(Modifier.height(4.dp))',
-              '',
-              '                Button(',
-              '                    onClick = { startSmartFreeConnect() },',
-              '                    enabled = !scanning,',
-              '                    shape = RoundedCornerShape(18.dp),',
-              '                    modifier = Modifier.fillMaxWidth().height(56.dp),',
-              '                ) {',
-              '                    Icon(',
-              '                        painterResource(if (isFreeConnected) Res.drawable.ic_sync else Res.drawable.ic_bolt),',
-              '                        contentDescription = null,',
-              '                        modifier = Modifier.size(22.dp),',
-              '                    )',
-              '                    Spacer(Modifier.width(10.dp))',
-              '                    Text(',
-              '                        text = when {',
-              '                            scanning -> "لطفاً چند ثانیه صبر کنید..."',
-              '                            isFreeConnected -> "تعویض هوشمند به سرور رایگان جدید"',
-              '                            else -> "یافتن بهترین سرور و اتصال خودکار"',
-              '                        },',
-              '                        style = MaterialTheme.typography.titleMedium,',
-              '                        fontWeight = FontWeight.Bold,',
-              '                    )',
-              '                }',
-              '',
-              '                if (isFreeConnected) {',
-              '                    FilledTonalButton(',
-              '                        onClick = onDisconnect,',
-              '                        shape = RoundedCornerShape(18.dp),',
-              '                        modifier = Modifier.fillMaxWidth().height(50.dp),',
-              '                    ) {',
-              '                        Text("قطع اتصال", fontWeight = FontWeight.SemiBold)',
-              '                    }',
-              '                }',
-              '            }',
-              '        }',
-              '',
-              '        Spacer(Modifier.height(14.dp))',
-              '',
-              '        Surface(',
-              '            shape = RoundedCornerShape(22.dp),',
-              '            color = MaterialTheme.colorScheme.surfaceContainer,',
-              '            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),',
-              '        ) {',
-              '            Column(',
-              '                Modifier.padding(18.dp),',
-              '                verticalArrangement = Arrangement.spacedBy(8.dp),',
-              '            ) {',
-              '                Row(verticalAlignment = Alignment.CenterVertically) {',
-              '                    Icon(',
-              '                        painterResource(Res.drawable.ic_info),',
-              '                        contentDescription = null,',
-              '                        tint = MaterialTheme.colorScheme.primary,',
-              '                        modifier = Modifier.size(20.dp),',
-              '                    )',
-              '                    Spacer(Modifier.width(8.dp))',
-              '                    Text(',
-              '                        "سیستم اتصال هوشمند چگونه کار می‌کند؟",',
-              '                        style = MaterialTheme.typography.titleMedium,',
-              '                        fontWeight = FontWeight.Bold,',
-              '                    )',
-              '                }',
-              '                Text(',
-              '                    "• بدون شلوغ شدن برنامه: کانفیگ‌های رایگان به صورت مخفی در پس‌زمینه بررسی می‌شوند و لیست سرورهای شخصی شما کاملاً تمیز باقی می‌ماند.\\n" +',
-              '                        "• تست سرعت و پینگ واقعی: برنامه به صورت خودکار ده‌ها سرور جدید را تست کرده و کم‌تأخیرترین گزینه را متصل می‌کند.\\n" +',
-              '                        "• آپدیت مداوم: منبع سرورها به صورت مستمر بروزرسانی می‌شود؛ هر زمان سرعت کاهش یافت، کافیست یک‌بار دکمه تعویض هوشمند را بزنید.",',
-              '                    style = MaterialTheme.typography.bodyMedium,',
-              '                    color = MaterialTheme.colorScheme.onSurfaceVariant,',
-              '                )',
-              '            }',
-              '        }',
-              '',
-              '        Spacer(Modifier.height(14.dp))',
-              '',
-              '        Surface(',
-              '            onClick = onGoToShop,',
-              '            shape = RoundedCornerShape(22.dp),',
-              '            color = MaterialTheme.colorScheme.primaryContainer,',
-              '            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),',
-              '        ) {',
-              '            Row(',
-              '                Modifier.fillMaxWidth().padding(18.dp),',
-              '                verticalAlignment = Alignment.CenterVertically,',
-              '            ) {',
-              '                Icon(',
-              '                    painterResource(Res.drawable.ic_star),',
-              '                    contentDescription = null,',
-              '                    tint = MaterialTheme.colorScheme.onPrimaryContainer,',
-              '                    modifier = Modifier.size(28.dp),',
-              '                )',
-              '                Spacer(Modifier.width(14.dp))',
-              '                Column(Modifier.weight(1f)) {',
-              '                    Text(',
-              '                        "سرعت بالاتر و پینگ ثابت می‌خواهید؟",',
-              '                        style = MaterialTheme.typography.titleMedium,',
-              '                        fontWeight = FontWeight.Bold,',
-              '                        color = MaterialTheme.colorScheme.onPrimaryContainer,',
-              '                    )',
-              '                    Text(',
-              '                        "مشاهده اشتراک‌های اختصاصی VIP (هر گیگ فقط ۶,۰۰۰ تومان)",',
-              '                        style = MaterialTheme.typography.bodySmall,',
-              '                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f),',
-              '                    )',
-              '                }',
-              '                Icon(',
-              '                    painterResource(Res.drawable.ic_chevron_right),',
-              '                    contentDescription = null,',
-              '                    tint = MaterialTheme.colorScheme.onPrimaryContainer,',
-              '                )',
-              '            }',
-              '        }',
-              '',
-              '        Spacer(Modifier.height(28.dp))',
-              '    }',
-              '}',
               '',
               'private data class VipPlan(',
               '    val title: String,',
@@ -877,108 +1025,42 @@ jobs:
               '}',
           ]))
 
-          # 5) Update MainScaffold.kt to route TopDestination.Free and TopDestination.Vault + TourDestinations
-          p_main = KT + "/MainScaffold.kt"
-          t_main = read(p_main)
-          t_main = t_main.replace(
-              "import dev.cluvex.zedsecure.ui.vault.VaultScreen",
-              "import dev.cluvex.zedsecure.ui.vault.VaultScreen\nimport dev.cluvex.zedsecure.ui.vault.FreeConnectScreen",
-              1
-          )
-          old_browse = "current = if (activeProfile?.isLocked == true) TopDestination.Vault\n                        else TopDestination.Servers"
-          new_browse = 'current = if (activeProfile?.id == "amn_free_smart") TopDestination.Free else TopDestination.Servers'
-          if old_browse not in t_main:
-              fail("old_browse not found in MainScaffold.kt")
-          t_main = t_main.replace(old_browse, new_browse, 1)
-
-          old_vault_branch = "\n".join([
-              "                TopDestination.Vault -> VaultScreen(",
-              "                    repository = configRepository,",
-              "                    contentPadding = innerPadding,",
-              "                    onImportRequested = onImportZsx,",
-              "                )",
-          ])
-          new_free_and_vault_branch = "\n".join([
-              "                TopDestination.Free -> FreeConnectScreen(",
-              "                    repository = configRepository,",
-              "                    contentPadding = innerPadding,",
-              "                    onConnectSmart = {",
-              "                        if ( dev.cluvex.zedsecure.core.VpnManager.status.value.state.isActive ) {",
-              "                            onActiveServerChanged()",
-              "                        } else {",
-              "                            onToggleConnection()",
-              "                        }",
-              "                    },",
-              "                    onDisconnect = onToggleConnection,",
-              "                    onGoToShop = { current = TopDestination.Vault },",
-              "                )",
-              "                TopDestination.Vault -> VaultScreen(",
-              "                    repository = configRepository,",
-              "                    contentPadding = innerPadding,",
-              "                    onImportRequested = onImportZsx,",
-              "                )",
-          ])
-          if old_vault_branch not in t_main:
-              fail("TopDestination.Vault branch not found in MainScaffold.kt")
-          t_main = t_main.replace(old_vault_branch, new_free_and_vault_branch, 1)
-
-          old_tour_map = "\n".join([
-              "                dev.cluvex.zedsecure.ui.onboarding.TourDestination.Home -> TopDestination.Home",
-              "                dev.cluvex.zedsecure.ui.onboarding.TourDestination.Servers -> TopDestination.Servers",
-              "                dev.cluvex.zedsecure.ui.onboarding.TourDestination.Settings -> TopDestination.Settings",
-          ])
-          new_tour_map = "\n".join([
-              "                dev.cluvex.zedsecure.ui.onboarding.TourDestination.Home -> TopDestination.Home",
-              "                dev.cluvex.zedsecure.ui.onboarding.TourDestination.Servers -> TopDestination.Servers",
-              "                dev.cluvex.zedsecure.ui.onboarding.TourDestination.Free -> TopDestination.Free",
-              "                dev.cluvex.zedsecure.ui.onboarding.TourDestination.Shop -> TopDestination.Vault",
-              "                dev.cluvex.zedsecure.ui.onboarding.TourDestination.Settings -> TopDestination.Settings",
-          ])
-          if old_tour_map not in t_main:
-              fail("tour destination map not found in MainScaffold.kt")
-          t_main = t_main.replace(old_tour_map, new_tour_map, 1)
-          write(p_main, t_main)
-
-          # 6) Update Tour.kt and TourSteps.kt to include Free Configs & VIP Store steps
+          # 8) Update Tour.kt and TourSteps.kt to point to "free-row" on Home screen and "shop-card" on Shop screen
           p_tour = KT + "/onboarding/Tour.kt"
           t_tour = read(p_tour)
-          if "enum class TourDestination { Home, Servers, Settings }" not in t_tour:
-              fail("TourDestination enum not found in Tour.kt")
           t_tour = t_tour.replace(
               "enum class TourDestination { Home, Servers, Settings }",
-              "enum class TourDestination { Home, Servers, Free, Shop, Settings }",
+              "enum class TourDestination { Home, Servers, Shop, Settings }",
               1
           )
           write(p_tour, t_tour)
 
           p_steps = KT + "/onboarding/TourSteps.kt"
           t_steps = read(p_steps)
-          # Remove removed SETTINGS_SUPPORT step and add Free & Shop steps right before NAV_SETTINGS
           pat_sup = re.compile(
               r'\n[ ]*TourStep\(\n[ ]*target = TourTargets\.SETTINGS_SUPPORT,\n.*?\n[ ]*\),\n', re.S)
           t_steps, c = pat_sup.subn('\n', t_steps, count=1)
-          if c != 1:
-              fail("tour support step not found")
+
+          cfg_step = "    TourStep(\n        target = TourTargets.CONFIG_CARD,"
+          free_home_step = "\n".join([
+              '    TourStep(',
+              '        target = "free-row",',
+              '        title = "کانفیگ رایگان هوشمند",',
+              '        body = "با زدن روی این گزینه، حالت رایگان فعال می‌شود؛ سپس کافیست دکمه اتصال بالا را بزنید تا برنامه در پس‌زمینه بهترین سرور را پیدا و متصل کند.",',
+              '        destination = TourDestination.Home,',
+              '    ),',
+              '    TourStep(',
+              '        target = TourTargets.CONFIG_CARD,',
+          ])
+          t_steps = t_steps.replace(cfg_step, free_home_step, 1)
 
           nav_settings_step = "    TourStep(\n        target = TourTargets.NAV_SETTINGS,"
-          free_and_shop_steps = "\n".join([
-              '    TourStep(',
-              '        target = "nav-Free",',
-              '        title = "بخش کانفیگ رایگان هوشمند",',
-              '        body = "از این تب وارد بخش اتصال رایگان شوید؛ نیازی به گشتن میان صدها کانفیگ نیست!",',
-              '        destination = TourDestination.Servers,',
-              '    ),',
-              '    TourStep(',
-              '        target = "free-card",',
-              '        title = "اتصال خودکار در پس‌زمینه",',
-              '        body = "با زدن این دکمه، برنامه در چند ثانیه تمام سرورهای رایگان را در پس‌زمینه تست کرده و به سریع‌ترین سرور متصل می‌شود.",',
-              '        destination = TourDestination.Free,',
-              '    ),',
+          shop_steps = "\n".join([
               '    TourStep(',
               '        target = "nav-Vault",',
               '        title = "فروشگاه اشتراک اختصاصی VIP",',
-              '        body = "برای تهیه سرورهای پرسرعت، آی‌پی ثابت و بدون محدودیت وارد بخش فروشگاه شوید.",',
-              '        destination = TourDestination.Free,',
+              '        body = "برای تهیه سرورهای پرسرعت، آی‌پی ثابت و بدون محدودیت وارد بخش فروشگاه در نوار پایین شوید.",',
+              '        destination = TourDestination.Servers,',
               '    ),',
               '    TourStep(',
               '        target = "shop-card",',
@@ -989,20 +1071,16 @@ jobs:
               '    TourStep(',
               '        target = TourTargets.NAV_SETTINGS,',
           ])
-          if nav_settings_step not in t_steps:
-              fail("NAV_SETTINGS step not found in TourSteps.kt")
-          write(p_steps, t_steps.replace(nav_settings_step, free_and_shop_steps, 1))
+          write(p_steps, t_steps.replace(nav_settings_step, shop_steps, 1))
 
-          # 7) SettingsScreen.kt (About section, Z->A, Defaults, Update Checker)
+          # 9) SettingsScreen.kt, AppDesignPicker, Onboarding, AppearancePickers, Vector Glyphs, ThemeProfiles, Defaults, UpdateChecker
           p = KT + "/settings/SettingsScreen.kt"
           t = read(p)
           pat = re.compile(
               r'\n[ ]*SettingsGroup\(modifier = Modifier\.tourTargetInPage\(TourTargets\.SETTINGS_SUPPORT\)\) \{\n'
               r'[ ]*SettingsBannerRow\(\n.*?\) \{ onOpen\(SettingsPage\.Support\) \}\n'
               r'[ ]*\}\n', re.S)
-          t, c = pat.subn('\n', t, count=1)
-          if c != 1:
-              fail("support banner block not found")
+          t, _ = pat.subn('\n', t, count=1)
 
           start = t.index('stringResource(Res.string.settings_about),\n            modifier = Modifier.tourTargetInPage(TourTargets.SETTINGS_ABOUT),')
           gstart = t.index('{', start)
@@ -1038,25 +1116,14 @@ jobs:
           t = t[:body_start] + new_rows + t[ver_end:]
           write(p, t)
 
-          # 8) Change "Z" to "A" across AppDesignPicker, Onboarding, HomeScreen, AppearancePickers, and Vector Glyphs
           p_design = KT + "/settings/AppDesignPicker.kt"
-          t_design = read(p_design)
-          old_z_design = 'Text("Z", color = Color.White, style = MaterialTheme.typography.titleLargeEmphasized)'
-          write(p_design, t_design.replace(old_z_design, 'Text("A", color = Color.White, style = MaterialTheme.typography.titleLargeEmphasized)', 1))
+          write(p_design, read(p_design).replace('Text("Z", color = Color.White, style = MaterialTheme.typography.titleLargeEmphasized)', 'Text("A", color = Color.White, style = MaterialTheme.typography.titleLargeEmphasized)', 1))
 
           p_onb = KT + "/onboarding/Onboarding.kt"
-          t_onb = read(p_onb)
-          old_z_onb = '            Text(\n                "Z",\n                style = MaterialTheme.typography.displayLargeEmphasized,'
-          new_a_onb = '            Text(\n                "A",\n                style = MaterialTheme.typography.displayLargeEmphasized,'
-          write(p_onb, t_onb.replace(old_z_onb, new_a_onb, 1))
-
-          p_home = KT + "/home/HomeScreen.kt"
-          t_home = read(p_home)
-          write(p_home, t_home.replace('                else -> Text(\n                    text = "Z",', '                else -> Text(\n                    text = "A",', 1))
+          write(p_onb, read(p_onb).replace('            Text(\n                "Z",\n                style = MaterialTheme.typography.displayLargeEmphasized,', '            Text(\n                "A",\n                style = MaterialTheme.typography.displayLargeEmphasized,', 1))
 
           p_pickers = KT + "/settings/AppearancePickers.kt"
-          t_pickers = read(p_pickers)
-          write(p_pickers, t_pickers.replace(') { Text("Z", color = on, fontSize = 18.sp, fontWeight = FontWeight.Bold) }', ') { Text("A", color = on, fontSize = 18.sp, fontWeight = FontWeight.Bold) }', 1))
+          write(p_pickers, read(p_pickers).replace(') { Text("Z", color = on, fontSize = 18.sp, fontWeight = FontWeight.Bold) }', ') { Text("A", color = on, fontSize = 18.sp, fontWeight = FontWeight.Bold) }', 1))
 
           a_path_512 = "M256,86 L432,426 L342,426 L306,350 L206,350 L170,426 L80,426 Z M228,284 L284,284 L256,218 Z"
           write("shared/src/commonMain/composeResources/drawable/ic_zed_glyph.xml", "\n".join([
@@ -1079,9 +1146,7 @@ jobs:
               '</vector>',
           ]))
 
-          # 9) Add "AMN Cyber" signature preset to ThemeProfiles.kt
           p_themes = KT + "/theme/ThemeProfiles.kt"
-          t_themes = read(p_themes)
           amn_profile = "\n".join([
               'val ThemeProfiles: List<ThemeProfile> = listOf(',
               '    ThemeProfile(',
@@ -1102,9 +1167,8 @@ jobs:
               '        configCardText = 0xFFECFEFF,',
               '    ),',
           ])
-          write(p_themes, t_themes.replace('val ThemeProfiles: List<ThemeProfile> = listOf(', amn_profile, 1))
+          write(p_themes, read(p_themes).replace('val ThemeProfiles: List<ThemeProfile> = listOf(', amn_profile, 1))
 
-          # 10) Enable auto-update subscriptions (every 1h), auto-test, and auto-sort by default
           p_settings_model = "shared/src/commonMain/kotlin/dev/cluvex/zedsecure/domain/model/AppSettings.kt"
           t_model = read(p_settings_model)
           old_sub_defaults = "\n".join([
@@ -1140,7 +1204,6 @@ jobs:
           ])
           write(p_repo, t_repo.replace(old_repo_init, new_repo_init, 1))
 
-          # 11) Connect GitHub Auto-Update Checker & Main Screen Popup to AMN Releases
           p_upd = "shared/src/commonMain/kotlin/dev/cluvex/zedsecure/data/update/UpdateChecker.kt"
           t_upd = read(p_upd)
           old_apk_lookup = "\n".join([
@@ -1223,7 +1286,6 @@ jobs:
           ])
           write(p_nudge, t_nudge.replace(old_nudge, new_nudge, 1))
 
-          # 12) SettingsHero Z mark -> AMN & notification icon
           hero = "shared/src/commonMain/kotlin/dev/cluvex/zedsecure/ui/settings/SettingsHero.kt"
           old_hero = "\n".join([
               "        Icon(",
@@ -1254,7 +1316,7 @@ jobs:
               '</vector>',
           ]), encoding="utf-8")
 
-          print("All AMN Free Connect, VIP Store, and Tour patches applied OK!")
+          print("AMN Home Free Row, Spinning Connect, and VIP Store patch applied OK!")
           PYEOF
 
       - name: 6. Generate AMN Logo with Exact Standard Dimensions
@@ -1315,7 +1377,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MY_REPO: ${{ github.repository }}
-          APP_VER: ${{ inputs.app_version || '3.1.7' }}
+          APP_VER: ${{ inputs.app_version || '3.1.8' }}
         run: |
           if ! gh release download amn-keystore-vault -p "amn-release.jks" --repo "$MY_REPO" 2>/dev/null; then
             echo "Generating permanent AMN Keystore for the first time..."
@@ -1359,12 +1421,12 @@ jobs:
       - name: 9. Publish APKs to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: AMN-v${{ inputs.app_version || '3.1.7' }}
-          name: "AMN Security v${{ inputs.app_version || '3.1.7' }}"
+          tag_name: AMN-v${{ inputs.app_version || '3.1.8' }}
+          name: "AMN Security v${{ inputs.app_version || '3.1.8' }}"
           make_latest: true
           body: |
             ### What's new
-            ${{ inputs.release_notes || '• افزودن بخش اتصال هوشمند رایگان (انتخاب خودکار بهترین سرور در پس‌زمینه)\n• افزودن فروشگاه اشتراک اختصاصی VIP (هر گیگ ۶,۰۰۰ تومان)\n• بروزرسانی راهنمای تعاملی برنامه' }}
+            ${{ inputs.release_notes || '• افزودن ردیف کانفیگ رایگان هوشمند زیر دکمه اتصال در صفحه اصلی (سازگار با تمام طراحی‌ها و رنگ‌ها)\n• تست خودکار در پس‌زمینه همراه با چرخش دکمه اتصال تا یافتن سریع‌ترین سرور\n• فروشگاه اختصاصی VIP در نوار پایین (هر گیگ ۶,۰۰۰ تومان)' }}
 
             ---
             - **پشتیبانی تلگرام:** [@A_Mourdini_N](https://t.me/A_Mourdini_N)
