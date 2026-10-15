@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       app_version:
-        description: 'شماره نسخه برنامه (برای انتشار آپدیت جدید، عدد را بالاتر ببرید مثلا 3.1.7)'
+        description: 'App Version (e.g., 3.1.6 or 3.1.7 for updates)'
         required: false
         default: '3.1.6'
       release_notes:
-        description: 'توضیحات آپدیت (در پنجره پاپ‌آپ آپدیت داخل برنامه نمایش داده می‌شود)'
+        description: 'Release Notes (shown in the in-app update dialog)'
         required: false
         default: '• بهبود سرعت و پایداری اتصال و بهینه‌سازی رابط کاربری اختصاصی AMN'
 
@@ -65,12 +65,12 @@ jobs:
           python3 - << 'EOF'
           import os, re
 
-          my_repo = os.environ.get("MY_REPO", "alimnmb/AMN")
+          my_repo = os.environ.get("MY_REPO", "alimourdini1/AMN")
           app_ver = os.environ.get("APP_VER", "3.1.6").strip() or "3.1.6"
           run_num = int(os.environ.get("RUN_NUM", "1"))
           ver_code = 35 + run_num
 
-          # ۰. تنظیم خودکار versionName و افزایش خودکار versionCode برای آپدیت بدون نیاز به حذف نسخه قبلی
+          # 0. Auto-increment versionCode & set versionName so updates install without uninstalling
           grad_props = "gradle.properties"
           if os.path.exists(grad_props):
               with open(grad_props, "r", encoding="utf-8") as f:
@@ -80,7 +80,7 @@ jobs:
               with open(grad_props, "w", encoding="utf-8") as f:
                   f.write(gp)
 
-          # ۱. تغییر شناسه نصب به com.amn.vpn (برای نصب در کنار ZedSecure بدون تداخل)
+          # 1. Change applicationId to com.amn.vpn
           for root, _, files in os.walk("app"):
               for file in files:
                   if file in ("build.gradle", "build.gradle.kts"):
@@ -95,7 +95,7 @@ jobs:
                       with open(path, "w", encoding="utf-8") as f:
                           f.write(content)
 
-          # ۲. جداسازی Authorities در مانیفست بدون دست زدن به نام کلاس‌های اجرایی یا Theme
+          # 2. Update provider authorities in AndroidManifest.xml
           manifest_path = "app/src/main/AndroidManifest.xml"
           if os.path.exists(manifest_path):
               with open(manifest_path, "r", encoding="utf-8") as f:
@@ -104,7 +104,7 @@ jobs:
               with open(manifest_path, "w", encoding="utf-8") as f:
                   f.write(m_text)
 
-          # ۳. تغییر فقط متن داخل تگ‌ها در strings.xml (بدون خراب شدن استایل‌ها)
+          # 3. Update strings.xml in app/src/main/res
           for root, _, files in os.walk("app/src/main/res"):
               for file in files:
                   if file == "strings.xml":
@@ -126,7 +126,7 @@ jobs:
                       except Exception:
                           pass
 
-          # ۴. تغییر نام نمایشی، User-Agent و ریپازیتوری گیت‌هاب در تمام فایل‌های Kotlin (هم app و هم shared)
+          # 4. Update display names, User-Agent, and GitHub repo across both app and shared Kotlin files
           for base_dir in ("app/src/main", "shared/src"):
               for root, _, files in os.walk(base_dir):
                   for file in files:
@@ -199,30 +199,32 @@ jobs:
           body_start = t.index('val fromPlay', gstart)
           ver_row = t.index('SettingsMenuRow(\n                stringResource(Res.string.settings_about),\n                AppInfo.versionName,', body_start)
           ver_end = t.index('{ onAbout() }', ver_row) + len('{ onAbout() }')
-          new_rows = '''val fromPlay = platform.distribution == Distribution.PlayStore
-                      SettingsMenuRow(
-                          stringResource(Res.string.update_check_title),
-                          when {
-                              checking -> stringResource(Res.string.update_checking)
-                              fromPlay -> stringResource(Res.string.update_check_summary)
-                              else -> stringResource(Res.string.update_check_summary_github)
-                          },
-                          art = SettingsArts.Update,
-                          trailing = if (checking) {
-                              { SettingsBusyIndicator() }
-                          } else {
-                              null
-                          },
-                      ) { if (!checking) { checking = true; checkTrigger++ } }
-                      SettingsMenuRow(
-                          "Created By Ali Mourdini",
-                          art = SettingsArts.About,
-                      ) { }
-                      SettingsMenuRow(
-                          "Support",
-                          "@A_Mourdini_N",
-                          art = SettingsArts.Support,
-                      ) { platform.openUri("https://t.me/A_Mourdini_N") }'''
+          new_rows = "\n".join([
+              'val fromPlay = platform.distribution == Distribution.PlayStore',
+              '            SettingsMenuRow(',
+              '                stringResource(Res.string.update_check_title),',
+              '                when {',
+              '                    checking -> stringResource(Res.string.update_checking)',
+              '                    fromPlay -> stringResource(Res.string.update_check_summary)',
+              '                    else -> stringResource(Res.string.update_check_summary_github)',
+              '                },',
+              '                art = SettingsArts.Update,',
+              '                trailing = if (checking) {',
+              '                    { SettingsBusyIndicator() }',
+              '                } else {',
+              '                    null',
+              '                },',
+              '            ) { if (!checking) { checking = true; checkTrigger++ } }',
+              '            SettingsMenuRow(',
+              '                "Created By Ali Mourdini",',
+              '                art = SettingsArts.About,',
+              '            ) { }',
+              '            SettingsMenuRow(',
+              '                "Support",',
+              '                "@A_Mourdini_N",',
+              '                art = SettingsArts.Support,',
+              '            ) { platform.openUri("https://t.me/A_Mourdini_N") }',
+          ])
           t = t[:body_start] + new_rows + t[ver_end:]
           write(p, t)
 
@@ -263,46 +265,50 @@ jobs:
           # 2f) Replace Z vector glyph with A in ic_zed_glyph.xml and ic_zed_mark.xml (used in PortalHome, etc.)
           a_path_512 = "M256,86 L432,426 L342,426 L306,350 L206,350 L170,426 L80,426 Z M228,284 L284,284 L256,218 Z"
           p_glyph = "shared/src/commonMain/composeResources/drawable/ic_zed_glyph.xml"
-          write(p_glyph, f'''<vector xmlns:android="http://schemas.android.com/apk/res/android"
-              android:width="24dp"
-              android:height="24dp"
-              android:viewportWidth="512"
-              android:viewportHeight="512">
-              <path android:fillColor="#FFFFFFFF" android:pathData="{a_path_512}" />
-          </vector>
-          ''')
+          write(p_glyph, "\n".join([
+              '<vector xmlns:android="http://schemas.android.com/apk/res/android"',
+              '    android:width="24dp"',
+              '    android:height="24dp"',
+              '    android:viewportWidth="512"',
+              '    android:viewportHeight="512">',
+              f'    <path android:fillColor="#FFFFFFFF" android:pathData="{a_path_512}" />',
+              '</vector>',
+          ]))
           p_mark = "shared/src/commonMain/composeResources/drawable/ic_zed_mark.xml"
-          write(p_mark, f'''<vector xmlns:android="http://schemas.android.com/apk/res/android"
-              android:width="512dp"
-              android:height="512dp"
-              android:viewportWidth="512"
-              android:viewportHeight="512">
-              <path android:fillColor="#FF00F5D4" android:pathData="M112,0 L400,0 A112,112 0 0 1 512,112 L512,400 A112,112 0 0 1 400,512 L112,512 A112,112 0 0 1 0,400 L0,112 A112,112 0 0 1 112,0 Z" />
-              <path android:fillColor="#FF090D16" android:pathData="{a_path_512}" />
-          </vector>
-          ''')
+          write(p_mark, "\n".join([
+              '<vector xmlns:android="http://schemas.android.com/apk/res/android"',
+              '    android:width="512dp"',
+              '    android:height="512dp"',
+              '    android:viewportWidth="512"',
+              '    android:viewportHeight="512">',
+              '    <path android:fillColor="#FF00F5D4" android:pathData="M112,0 L400,0 A112,112 0 0 1 512,112 L512,400 A112,112 0 0 1 400,512 L112,512 A112,112 0 0 1 0,400 L0,112 A112,112 0 0 1 112,0 Z" />',
+              f'    <path android:fillColor="#FF090D16" android:pathData="{a_path_512}" />',
+              '</vector>',
+          ]))
 
           # 2g) Add "AMN Cyber" signature preset to ThemeProfiles.kt
           p_themes = KT + "/theme/ThemeProfiles.kt"
           t_themes = read(p_themes)
-          amn_profile = '''val ThemeProfiles: List<ThemeProfile> = listOf(
-              ThemeProfile(
-                  id = "amn_cyber",
-                  name = "AMN Cyber",
-                  accentIndex = 2,
-                  amoled = true,
-                  download = 0xFF00F5D4,
-                  upload = 0xFF38BDF8,
-                  downloadTile = 0xFF072624,
-                  uploadTile = 0xFF091E36,
-                  connect = 0xFF00F5D4,
-                  connected = 0xFF2563EB,
-                  tapHint = 0xFF99F6E4,
-                  serverCard = 0xFF0B1528,
-                  serverActive = 0xFF00F5D4,
-                  configCard = 0xFF0D1B33,
-                  configCardText = 0xFFECFEFF,
-              ),'''
+          amn_profile = "\n".join([
+              'val ThemeProfiles: List<ThemeProfile> = listOf(',
+              '    ThemeProfile(',
+              '        id = "amn_cyber",',
+              '        name = "AMN Cyber",',
+              '        accentIndex = 2,',
+              '        amoled = true,',
+              '        download = 0xFF00F5D4,',
+              '        upload = 0xFF38BDF8,',
+              '        downloadTile = 0xFF072624,',
+              '        uploadTile = 0xFF091E36,',
+              '        connect = 0xFF00F5D4,',
+              '        connected = 0xFF2563EB,',
+              '        tapHint = 0xFF99F6E4,',
+              '        serverCard = 0xFF0B1528,',
+              '        serverActive = 0xFF00F5D4,',
+              '        configCard = 0xFF0D1B33,',
+              '        configCardText = 0xFFECFEFF,',
+              '    ),',
+          ])
           if 'val ThemeProfiles: List<ThemeProfile> = listOf(' not in t_themes:
               fail("ThemeProfiles list not found")
           write(p_themes, t_themes.replace('val ThemeProfiles: List<ThemeProfile> = listOf(', amn_profile, 1))
@@ -310,16 +316,20 @@ jobs:
           # 2h) Enable auto-update subscriptions (every 1h), auto-test, and auto-sort by default
           p_settings_model = "shared/src/commonMain/kotlin/dev/cluvex/zedsecure/domain/model/AppSettings.kt"
           t_model = read(p_settings_model)
-          old_sub_defaults = """    val autoUpdateSubscriptions: Boolean = false,
-    val subscriptionUpdateIntervalHours: Int = 12,
-    val autoTestAfterUpdate: Boolean = false,
-    val autoRemoveInvalidAfterTest: Boolean = false,
-    val autoSortAfterTest: Boolean = false,"""
-          new_sub_defaults = """    val autoUpdateSubscriptions: Boolean = true,
-    val subscriptionUpdateIntervalHours: Int = 1,
-    val autoTestAfterUpdate: Boolean = true,
-    val autoRemoveInvalidAfterTest: Boolean = false,
-    val autoSortAfterTest: Boolean = true,"""
+          old_sub_defaults = "\n".join([
+              '    val autoUpdateSubscriptions: Boolean = false,',
+              '    val subscriptionUpdateIntervalHours: Int = 12,',
+              '    val autoTestAfterUpdate: Boolean = false,',
+              '    val autoRemoveInvalidAfterTest: Boolean = false,',
+              '    val autoSortAfterTest: Boolean = false,',
+          ])
+          new_sub_defaults = "\n".join([
+              '    val autoUpdateSubscriptions: Boolean = true,',
+              '    val subscriptionUpdateIntervalHours: Int = 1,',
+              '    val autoTestAfterUpdate: Boolean = true,',
+              '    val autoRemoveInvalidAfterTest: Boolean = false,',
+              '    val autoSortAfterTest: Boolean = true,',
+          ])
           if old_sub_defaults not in t_model:
               fail("subscription defaults block not found in AppSettings.kt")
           write(p_settings_model, t_model.replace(old_sub_defaults, new_sub_defaults, 1))
@@ -327,16 +337,18 @@ jobs:
           p_repo = "app/src/main/java/dev/cluvex/zedsecure/data/settings/SettingsRepository.kt"
           t_repo = read(p_repo)
           old_repo_init = '        val d = AppSettings(useZepTun = true, directDns = "localhost")'
-          new_repo_init = """        val d = AppSettings(useZepTun = true, directDns = "localhost")
-        if (!prefs.getBoolean("amn_sub_defaults_v1", false)) {
-            prefs.edit()
-                .putBoolean("auto_sub", true)
-                .putInt("sub_interval", 1)
-                .putBoolean("auto_test_after_update", true)
-                .putBoolean("auto_sort_after_test", true)
-                .putBoolean("amn_sub_defaults_v1", true)
-                .apply()
-        }"""
+          new_repo_init = "\n".join([
+              '        val d = AppSettings(useZepTun = true, directDns = "localhost")',
+              '        if (!prefs.getBoolean("amn_sub_defaults_v1", false)) {',
+              '            prefs.edit()',
+              '                .putBoolean("auto_sub", true)',
+              '                .putInt("sub_interval", 1)',
+              '                .putBoolean("auto_test_after_update", true)',
+              '                .putBoolean("auto_sort_after_test", true)',
+              '                .putBoolean("amn_sub_defaults_v1", true)',
+              '                .apply()',
+              '        }',
+          ])
           if old_repo_init not in t_repo:
               fail("SettingsRepository init line not found")
           write(p_repo, t_repo.replace(old_repo_init, new_repo_init, 1))
@@ -344,28 +356,36 @@ jobs:
           # 2i) Connect GitHub Auto-Update Checker & Main Screen Popup to AMN Releases
           p_upd = "shared/src/commonMain/kotlin/dev/cluvex/zedsecure/data/update/UpdateChecker.kt"
           t_upd = read(p_upd)
-          old_apk_lookup = '''        val apk = if (abis.isEmpty()) null else {
-            (abis.map { "ZedSecure-$version-$it.apk" } + "ZedSecure-$version-universal.apk")
-                .firstNotNullOfOrNull { assets[it] }
-        }'''
-          new_apk_lookup = '''        val apk = abis.firstNotNullOfOrNull { abi ->
-            assets.entries.firstOrNull { (name, _) ->
-                name.endsWith(".apk", ignoreCase = true) && name.contains(abi, ignoreCase = true)
-            }?.value
-        } ?: assets.entries.firstOrNull { (name, _) -> name.endsWith(".apk", ignoreCase = true) }?.value'''
+          old_apk_lookup = "\n".join([
+              '        val apk = if (abis.isEmpty()) null else {',
+              '            (abis.map { "ZedSecure-$version-$it.apk" } + "ZedSecure-$version-universal.apk")',
+              '                .firstNotNullOfOrNull { assets[it] }',
+              '        }',
+          ])
+          new_apk_lookup = "\n".join([
+              '        val apk = abis.firstNotNullOfOrNull { abi ->',
+              '            assets.entries.firstOrNull { (name, _) ->',
+              '                name.endsWith(".apk", ignoreCase = true) && name.contains(abi, ignoreCase = true)',
+              '            }?.value',
+              '        } ?: assets.entries.firstOrNull { (name, _) -> name.endsWith(".apk", ignoreCase = true) }?.value',
+          ])
           if old_apk_lookup not in t_upd:
               fail("apk lookup not found in UpdateChecker.kt")
           t_upd = t_upd.replace(old_apk_lookup, new_apk_lookup, 1)
 
-          old_notes = '''        val start = markdown.indexOf(WHATS_NEW)
-        if (start < 0) return ""
-        val section = markdown.substring(start + WHATS_NEW.length).substringBefore("\\n<sub>").substringBefore("\\n### ")'''
-          new_notes = '''        val start = markdown.indexOf(WHATS_NEW)
-        val section = if (start >= 0) {
-            markdown.substring(start + WHATS_NEW.length).substringBefore("\\n<sub>").substringBefore("\\n### ")
-        } else {
-            markdown.substringBefore("\\n<sub>")
-        }'''
+          old_notes = "\n".join([
+              '        val start = markdown.indexOf(WHATS_NEW)',
+              '        if (start < 0) return ""',
+              '        val section = markdown.substring(start + WHATS_NEW.length).substringBefore("\\n<sub>").substringBefore("\\n### ")',
+          ])
+          new_notes = "\n".join([
+              '        val start = markdown.indexOf(WHATS_NEW)',
+              '        val section = if (start >= 0) {',
+              '            markdown.substring(start + WHATS_NEW.length).substringBefore("\\n<sub>").substringBefore("\\n### ")',
+              '        } else {',
+              '            markdown.substringBefore("\\n<sub>")',
+              '        }',
+          ])
           if old_notes not in t_upd:
               fail("releaseNotesFrom block not found in UpdateChecker.kt")
           t_upd = t_upd.replace(old_notes, new_notes, 1)
@@ -379,42 +399,46 @@ jobs:
 
           p_nudge = KT + "/update/NudgeHost.kt"
           t_nudge = read(p_nudge)
-          old_nudge = '''    LaunchedEffect(settings.lastUpdateCheckMs) {
-        val now = currentTimeMillis()
-        if (settings.lastUpdateCheckMs == 0L) {
-            onUpdateSettings { it.copy(lastUpdateCheckMs = now) }
-            return@LaunchedEffect
-        }
-        if (now - settings.lastUpdateCheckMs < NudgePolicy.UPDATE_CHECK_INTERVAL_MS) return@LaunchedEffect
-
-        onUpdateSettings { it.copy(lastUpdateCheckMs = now) }
-        val socks = if (VpnManager.status.value.state == ConnectionState.Connected) {
-            VpnManager.activeSocksPort
-        } else {
-            null
-        }
-        val info = UpdateChecker.fetchLatest(
-            platform.distribution,
-            platform.deviceAbis,
-            socks,
-            settings.language.tag ?: "en",
-        ) ?: return@LaunchedEffect'''
-          new_nudge = '''    LaunchedEffect(status.state == ConnectionState.Connected) {
-        val now = currentTimeMillis()
-        if (settings.lastUpdateCheckMs != 0L && now - settings.lastUpdateCheckMs < NudgePolicy.UPDATE_CHECK_INTERVAL_MS) return@LaunchedEffect
-
-        val socks = if (VpnManager.status.value.state == ConnectionState.Connected) {
-            VpnManager.activeSocksPort
-        } else {
-            null
-        }
-        val info = UpdateChecker.fetchLatest(
-            platform.distribution,
-            platform.deviceAbis,
-            socks,
-            settings.language.tag ?: "en",
-        ) ?: return@LaunchedEffect
-        onUpdateSettings { it.copy(lastUpdateCheckMs = now) }'''
+          old_nudge = "\n".join([
+              '    LaunchedEffect(settings.lastUpdateCheckMs) {',
+              '        val now = currentTimeMillis()',
+              '        if (settings.lastUpdateCheckMs == 0L) {',
+              '            onUpdateSettings { it.copy(lastUpdateCheckMs = now) }',
+              '            return@LaunchedEffect',
+              '        }',
+              '        if (now - settings.lastUpdateCheckMs < NudgePolicy.UPDATE_CHECK_INTERVAL_MS) return@LaunchedEffect',
+              '',
+              '        onUpdateSettings { it.copy(lastUpdateCheckMs = now) }',
+              '        val socks = if (VpnManager.status.value.state == ConnectionState.Connected) {',
+              '            VpnManager.activeSocksPort',
+              '        } else {',
+              '            null',
+              '        }',
+              '        val info = UpdateChecker.fetchLatest(',
+              '            platform.distribution,',
+              '            platform.deviceAbis,',
+              '            socks,',
+              '            settings.language.tag ?: "en",',
+              '        ) ?: return@LaunchedEffect',
+          ])
+          new_nudge = "\n".join([
+              '    LaunchedEffect(status.state == ConnectionState.Connected) {',
+              '        val now = currentTimeMillis()',
+              '        if (settings.lastUpdateCheckMs != 0L && now - settings.lastUpdateCheckMs < NudgePolicy.UPDATE_CHECK_INTERVAL_MS) return@LaunchedEffect',
+              '',
+              '        val socks = if (VpnManager.status.value.state == ConnectionState.Connected) {',
+              '            VpnManager.activeSocksPort',
+              '        } else {',
+              '            null',
+              '        }',
+              '        val info = UpdateChecker.fetchLatest(',
+              '            platform.distribution,',
+              '            platform.deviceAbis,',
+              '            socks,',
+              '            settings.language.tag ?: "en",',
+              '        ) ?: return@LaunchedEffect',
+              '        onUpdateSettings { it.copy(lastUpdateCheckMs = now) }',
+          ])
           if old_nudge not in t_nudge:
               fail("LaunchedEffect block not found in NudgeHost.kt")
           write(p_nudge, t_nudge.replace(old_nudge, new_nudge, 1))
@@ -481,13 +505,14 @@ jobs:
           icon = Path("app/src/main/res/drawable/ic_tile_zed.xml")
           if not icon.exists():
               raise SystemExit("AMN patch failed: notification icon file missing")
-          icon.write_text("""<vector xmlns:android="http://schemas.android.com/apk/res/android"
-              android:width="24dp" android:height="24dp"
-              android:viewportWidth="24" android:viewportHeight="24">
-              <path android:fillColor="#FFFFFFFF"
-                android:pathData="M12,2.5 L22,21.5 L17.2,21.5 L15.2,17.5 L8.8,17.5 L6.8,21.5 L2,21.5 Z M10.2,13.8 L13.8,13.8 L12,10.2 Z" />
-          </vector>
-          """, encoding="utf-8")
+          icon.write_text("\n".join([
+              '<vector xmlns:android="http://schemas.android.com/apk/res/android"',
+              '    android:width="24dp" android:height="24dp"',
+              '    android:viewportWidth="24" android:viewportHeight="24">',
+              '    <path android:fillColor="#FFFFFFFF"',
+              '      android:pathData="M12,2.5 L22,21.5 L17.2,21.5 L15.2,17.5 L8.8,17.5 L6.8,21.5 L2,21.5 Z M10.2,13.8 L13.8,13.8 L12,10.2 Z" />',
+              '</vector>',
+          ]), encoding="utf-8")
 
           for base in (Path("shared/src/commonMain/composeResources"), Path("app/src/main/res")):
               for p in base.glob("values*/strings.xml"):
@@ -573,7 +598,7 @@ jobs:
             gh release create amn-keystore-vault amn-release.jks \
               --repo "$MY_REPO" \
               --title "AMN Permanent Keystore (Do Not Delete)" \
-              --notes "این فایل کلید امضای ثابت برنامه است تا آپدیت‌های بعدی بدون نیاز به حذف نسخه قبلی روی گوشی نصب شوند." \
+              --notes "Permanent signing key so future updates install over existing app without uninstalling." \
               --prerelease || true
           else
             echo "Reusing existing permanent AMN Keystore from amn-keystore-vault..."
