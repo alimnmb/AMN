@@ -6,11 +6,11 @@ on:
       app_version:
         description: 'App Version (e.g., 3.1.6 or 3.1.7 for updates)'
         required: false
-        default: '3.1.6'
+        default: '3.1.7'
       release_notes:
         description: 'Release Notes (shown in the in-app update dialog)'
         required: false
-        default: '• بهبود سرعت و پایداری اتصال و بهینه‌سازی رابط کاربری اختصاصی AMN'
+        default: '• افزودن بخش اتصال هوشمند رایگان (انتخاب خودکار بهترین سرور در پس‌زمینه)\n• افزودن فروشگاه اشتراک اختصاصی VIP (هر گیگ ۶,۰۰۰ تومان)\n• بروزرسانی راهنمای تعاملی برنامه'
 
 permissions:
   contents: write
@@ -59,14 +59,14 @@ jobs:
       - name: 5. Safe Rebrand to AMN & Dynamic Version Setup
         env:
           MY_REPO: ${{ github.repository }}
-          APP_VER: ${{ inputs.app_version || '3.1.6' }}
+          APP_VER: ${{ inputs.app_version || '3.1.7' }}
           RUN_NUM: ${{ github.run_number }}
         run: |
           python3 - << 'EOF'
           import os, re
 
           my_repo = os.environ.get("MY_REPO", "alimourdini1/AMN")
-          app_ver = os.environ.get("APP_VER", "3.1.6").strip() or "3.1.6"
+          app_ver = os.environ.get("APP_VER", "3.1.7").strip() or "3.1.7"
           run_num = int(os.environ.get("RUN_NUM", "1"))
           ver_code = 35 + run_num
 
@@ -150,10 +150,11 @@ jobs:
                               pass
           EOF
 
-      - name: 5b. AMN UI Changes, Auto-Update Popup & Default Settings
+      - name: 5b. AMN UI Changes, Free Smart Connect, VIP Store & Updated Tour
         run: |
           python3 - << 'PYEOF'
           import re, sys, glob
+          from pathlib import Path
 
           def fail(msg):
               print("AMN PATCH FAILED: " + msg)
@@ -169,22 +170,832 @@ jobs:
 
           KT = "shared/src/commonMain/kotlin/dev/cluvex/zedsecure/ui"
 
-          # 1) Home title: app_name -> AMN
-          n = 0
+          # 1) Update strings.xml (App name, Nav labels for Free & Shop, and Tour texts)
           for p in glob.glob("shared/src/commonMain/composeResources/values*/strings.xml"):
               t = read(p)
-              new = re.sub(r'(<string name="app_name">)[^<]*(</string>)', r'\1AMN\2', t)
-              if new != t:
-                  write(p, new)
-                  n += 1
-          if n == 0:
-              fail("app_name not found in shared strings.xml")
+              is_fa = "values-fa" in p
+              t = re.sub(r'(<string name="app_name">)[^<]*(</string>)', r'\1AMN\2', t)
+              t = re.sub(
+                  r'(<string name="nav_locked">)[^<]*(</string>)',
+                  r'\1فروشگاه\2' if is_fa else r'\1VIP Store\2',
+                  t
+              )
+              t = re.sub(
+                  r'(<string name="vault_experimental_badge">)[^<]*(</string>)',
+                  r'\1رایگان\2' if is_fa else r'\1Free\2',
+                  t
+              )
+              t = re.sub(
+                  r'>([^<]*?)ZedSecure([^<]*?)<',
+                  lambda m: '>' + m.group(1) + 'AMN' + m.group(2) + '<',
+                  t,
+                  flags=re.IGNORECASE
+              )
+              write(p, t)
 
-          # 2) Settings screen
+          # 2) Add upsertHiddenFreeProfile helper to ConfigRepository.kt
+          p_cr = "shared/src/commonMain/kotlin/dev/cluvex/zedsecure/data/config/ConfigRepository.kt"
+          t_cr = read(p_cr)
+          cr_anchor = "    fun setActive(id: String?) {"
+          cr_inject = "\n".join([
+              '    fun upsertHiddenFreeProfile(profile: VpnProfile) {',
+              '        _profiles.value = _profiles.value.filterNot { it.id == "amn_free_smart" } + profile',
+              '        persistProfiles()',
+              '        setActive(profile.id)',
+              '    }',
+              '',
+              '    fun setActive(id: String?) {',
+          ])
+          if cr_anchor not in t_cr:
+              fail("setActive not found in ConfigRepository.kt")
+          write(p_cr, t_cr.replace(cr_anchor, cr_inject, 1))
+
+          # 3) Update TopDestination.kt to include Free (رایگان) and Vault (فروشگاه)
+          p_top = KT + "/navigation/TopDestination.kt"
+          write(p_top, "\n".join([
+              'package dev.cluvex.zedsecure.ui.navigation',
+              '',
+              'import dev.cluvex.zedsecure.shared.resources.Res',
+              'import dev.cluvex.zedsecure.shared.resources.ic_bolt',
+              'import dev.cluvex.zedsecure.shared.resources.ic_dns',
+              'import dev.cluvex.zedsecure.shared.resources.ic_home',
+              'import dev.cluvex.zedsecure.shared.resources.ic_settings',
+              'import dev.cluvex.zedsecure.shared.resources.ic_star',
+              'import dev.cluvex.zedsecure.shared.resources.nav_home',
+              'import dev.cluvex.zedsecure.shared.resources.nav_locked',
+              'import dev.cluvex.zedsecure.shared.resources.nav_servers',
+              'import dev.cluvex.zedsecure.shared.resources.nav_settings',
+              'import dev.cluvex.zedsecure.shared.resources.vault_experimental_badge',
+              'import org.jetbrains.compose.resources.DrawableResource',
+              'import org.jetbrains.compose.resources.StringResource',
+              '',
+              'enum class TopDestination(',
+              '    val labelRes: StringResource,',
+              '    val icon: DrawableResource,',
+              ') {',
+              '    Home(Res.string.nav_home, Res.drawable.ic_home),',
+              '    Servers(Res.string.nav_servers, Res.drawable.ic_dns),',
+              '    Free(Res.string.vault_experimental_badge, Res.drawable.ic_bolt),',
+              '    Vault(Res.string.nav_locked, Res.drawable.ic_star),',
+              '    Settings(Res.string.nav_settings, Res.drawable.ic_settings),',
+              '}',
+          ]))
+
+          # 4) Replace VaultScreen.kt with FreeConnectScreen + AMN VIP Store (VaultScreen)
+          p_vault = KT + "/vault/VaultScreen.kt"
+          write(p_vault, "\n".join([
+              '@file:OptIn(',
+              '    androidx.compose.material3.ExperimentalMaterial3Api::class,',
+              '    androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class,',
+              ')',
+              '',
+              'package dev.cluvex.zedsecure.ui.vault',
+              '',
+              'import androidx.compose.animation.AnimatedContent',
+              'import androidx.compose.animation.animateColorAsState',
+              'import androidx.compose.foundation.background',
+              'import androidx.compose.foundation.border',
+              'import androidx.compose.foundation.layout.Arrangement',
+              'import androidx.compose.foundation.layout.Box',
+              'import androidx.compose.foundation.layout.Column',
+              'import androidx.compose.foundation.layout.PaddingValues',
+              'import androidx.compose.foundation.layout.Row',
+              'import androidx.compose.foundation.layout.Spacer',
+              'import androidx.compose.foundation.layout.fillMaxSize',
+              'import androidx.compose.foundation.layout.fillMaxWidth',
+              'import androidx.compose.foundation.layout.height',
+              'import androidx.compose.foundation.layout.padding',
+              'import androidx.compose.foundation.layout.size',
+              'import androidx.compose.foundation.layout.width',
+              'import androidx.compose.foundation.rememberScrollState',
+              'import androidx.compose.foundation.shape.CircleShape',
+              'import androidx.compose.foundation.shape.RoundedCornerShape',
+              'import androidx.compose.foundation.verticalScroll',
+              'import androidx.compose.material3.Button',
+              'import androidx.compose.material3.CircularProgressIndicator',
+              'import androidx.compose.material3.FilledTonalButton',
+              'import androidx.compose.material3.Icon',
+              'import androidx.compose.material3.LinearProgressIndicator',
+              'import androidx.compose.material3.MaterialTheme',
+              'import androidx.compose.material3.Surface',
+              'import androidx.compose.material3.Text',
+              'import androidx.compose.runtime.Composable',
+              'import androidx.compose.runtime.getValue',
+              'import androidx.compose.runtime.mutableIntStateOf',
+              'import androidx.compose.runtime.mutableStateOf',
+              'import androidx.compose.runtime.remember',
+              'import androidx.compose.runtime.rememberCoroutineScope',
+              'import androidx.compose.runtime.saveable.rememberSaveable',
+              'import androidx.compose.runtime.setValue',
+              'import androidx.compose.ui.Alignment',
+              'import androidx.compose.ui.Modifier',
+              'import androidx.compose.ui.draw.clip',
+              'import androidx.compose.ui.graphics.Color',
+              'import androidx.compose.ui.text.font.FontWeight',
+              'import androidx.compose.ui.text.style.TextAlign',
+              'import androidx.compose.ui.unit.dp',
+              'import androidx.lifecycle.compose.collectAsStateWithLifecycle',
+              'import dev.cluvex.zedsecure.core.VpnManager',
+              'import dev.cluvex.zedsecure.data.config.ConfigRepository',
+              'import dev.cluvex.zedsecure.data.net.PingService',
+              'import dev.cluvex.zedsecure.domain.config.ConfigParser',
+              'import dev.cluvex.zedsecure.domain.config.SubscriptionParser',
+              'import dev.cluvex.zedsecure.domain.config.VpnProfile',
+              'import dev.cluvex.zedsecure.domain.model.ConnectionState',
+              'import dev.cluvex.zedsecure.platform.currentTimeMillis',
+              'import dev.cluvex.zedsecure.platform.httpGetResponse',
+              'import dev.cluvex.zedsecure.platform.tcpConnectMillis',
+              'import dev.cluvex.zedsecure.shared.resources.Res',
+              'import dev.cluvex.zedsecure.shared.resources.*',
+              'import dev.cluvex.zedsecure.ui.components.MorphingBlob',
+              'import dev.cluvex.zedsecure.ui.components.PageHeader',
+              'import dev.cluvex.zedsecure.ui.onboarding.tourTarget',
+              'import dev.cluvex.zedsecure.ui.platform.LocalPlatform',
+              'import dev.cluvex.zedsecure.ui.theme.ZedGradients',
+              'import kotlinx.coroutines.Dispatchers',
+              'import kotlinx.coroutines.async',
+              'import kotlinx.coroutines.awaitAll',
+              'import kotlinx.coroutines.coroutineScope',
+              'import kotlinx.coroutines.launch',
+              'import kotlinx.coroutines.sync.Semaphore',
+              'import kotlinx.coroutines.sync.withPermit',
+              'import kotlinx.coroutines.withContext',
+              'import org.jetbrains.compose.resources.painterResource',
+              '',
+              'private val FREE_SUB_URLS = listOf(',
+              '    "https://raw.githubusercontent.com/patterniha/Free-Configs/main/configs.txt",',
+              '    "https://cdn.jsdelivr.net/gh/patterniha/Free-Configs@main/configs.txt",',
+              '    "https://ghproxy.net/https://raw.githubusercontent.com/patterniha/Free-Configs/main/configs.txt",',
+              ')',
+              '',
+              '@Composable',
+              'fun FreeConnectScreen(',
+              '    repository: ConfigRepository,',
+              '    contentPadding: PaddingValues,',
+              '    onConnectSmart: () -> Unit,',
+              '    onDisconnect: () -> Unit,',
+              '    onGoToShop: () -> Unit,',
+              '    modifier: Modifier = Modifier,',
+              ') {',
+              '    val platform = LocalPlatform.current',
+              '    val scope = rememberCoroutineScope()',
+              '    val vpnStatus by VpnManager.status.collectAsStateWithLifecycle()',
+              '    val activeId by repository.activeId.collectAsStateWithLifecycle()',
+              '    val profiles by repository.profiles.collectAsStateWithLifecycle()',
+              '    val freeProfile = remember(profiles) { profiles.firstOrNull { it.id == "amn_free_smart" } }',
+              '    val isFreeConnected = vpnStatus.state == ConnectionState.Connected && activeId == "amn_free_smart"',
+              '',
+              '    var scanning by rememberSaveable { mutableStateOf(false) }',
+              '    var statusText by rememberSaveable {',
+              '        mutableStateOf("آماده اسکن هوشمند و اتصال خودکار به بهترین سرور رایگان")',
+              '    }',
+              '    var progressStep by rememberSaveable { mutableIntStateOf(0) }',
+              '',
+              '    fun startSmartFreeConnect() {',
+              '        if (scanning) return',
+              '        scanning = true',
+              '        progressStep = 1',
+              '        statusText = "در حال دریافت لیست سرورهای رایگان از مخزن ابری..."',
+              '        scope.launch {',
+              '            val result = withContext(Dispatchers.IO) {',
+              '                runCatching {',
+              '                    val socks = VpnManager.activeSocksPort?.takeIf {',
+              '                        it > 0 && VpnManager.status.value.state == ConnectionState.Connected',
+              '                    }',
+              '                    var rawBody: String? = null',
+              '                    for (u in FREE_SUB_URLS) {',
+              '                        val r = if (socks != null) {',
+              '                            runCatching { httpGetResponse(u, userAgent = "AMN/3.1.7", socksPort = socks).body }.getOrNull()',
+              '                                ?: runCatching { httpGetResponse(u, userAgent = "AMN/3.1.7").body }.getOrNull()',
+              '                        } else {',
+              '                            runCatching { httpGetResponse(u, userAgent = "AMN/3.1.7").body }.getOrNull()',
+              '                        }',
+              '                        if (!r.isNullOrBlank()) {',
+              '                            rawBody = r',
+              '                            break',
+              '                        }',
+              '                    }',
+              '                    val text = rawBody ?: error("خطا در دریافت سرورها؛ اینترنت خود را بررسی کنید")',
+              '                    val decoded = runCatching { ConfigParser.decodeBase64Utf8(text.trim()) }.getOrNull()?.takeIf { it.isNotBlank() } ?: text',
+              '                    val links = SubscriptionParser.extractLinks(decoded).ifEmpty { SubscriptionParser.extractLinks(text) }',
+              '                    if (links.isEmpty()) error("سرور فعالی در منبع یافت نشد")',
+              '',
+              '                    withContext(Dispatchers.Main) {',
+              '                        progressStep = 2',
+              '                        statusText = "در حال تست پینگ و کیفیت ${links.size} سرور در پس‌زمینه..."',
+              '                    }',
+              '',
+              '                    val candidates = links.shuffled().take(55).mapNotNull { lnk ->',
+              '                        runCatching {',
+              '                            VpnProfile.fromLink(link = lnk, id = "tmp", addedAt = 0L, locked = true)',
+              '                        }.getOrNull()',
+              '                    }',
+              '                    if (candidates.isEmpty()) error("کانفیگ قابل استفاده‌ای یافت نشد")',
+              '',
+              '                    val tcpSem = Semaphore(20)',
+              '                    val tcpPassed = coroutineScope {',
+              '                        candidates.map { prof ->',
+              '                            async {',
+              '                                val ms = tcpSem.withPermit {',
+              '                                    if (prof.address.isNotBlank() && prof.port in 1..65535) {',
+              '                                        tcpConnectMillis(prof.address, prof.port, 1400)',
+              '                                    } else -1L',
+              '                                }',
+              '                                if (ms > 0) prof to ms.toInt() else null',
+              '                            }',
+              '                        }.awaitAll().filterNotNull().sortedBy { it.second }',
+              '                    }',
+              '',
+              '                    val finalists = tcpPassed.take(10)',
+              '                    if (finalists.isEmpty()) error("هیچ‌کدام از سرورهای رایگان به پینگ پاسخ ندادند")',
+              '',
+              '                    withContext(Dispatchers.Main) {',
+              '                        progressStep = 3',
+              '                        statusText = "در حال انتخاب سریع‌ترین سرور و برقراری اتصال..."',
+              '                    }',
+              '',
+              '                    val realSem = Semaphore(5)',
+              '                    val realPassed = coroutineScope {',
+              '                        finalists.map { (prof, tcpMs) ->',
+              '                            async {',
+              '                                val realMs = realSem.withPermit {',
+              '                                    runCatching { PingService.realDelay(prof) }.getOrDefault(-1L)',
+              '                                }',
+              '                                if (realMs > 0) prof to realMs.toInt() else null',
+              '                            }',
+              '                        }.awaitAll().filterNotNull().sortedBy { it.second }',
+              '                    }',
+              '',
+              '                    val (winner, bestMs) = realPassed.firstOrNull() ?: finalists.first()',
+              '                    val finalProfile = winner.copy(',
+              '                        id = "amn_free_smart",',
+              '                        name = "⚡ اتصال هوشمند رایگان AMN",',
+              '                        isLocked = true,',
+              '                        addedAt = currentTimeMillis(),',
+              '                        lastPingMs = bestMs,',
+              '                        note = "متصل به بهترین سرور رایگان (پینگ: ${bestMs}ms) • انتخاب خودکار در پس‌زمینه",',
+              '                    )',
+              '                    finalProfile to bestMs',
+              '                }',
+              '            }',
+              '            scanning = false',
+              '            progressStep = 0',
+              '            result.onSuccess { (winnerProfile, bestMs) ->',
+              '                repository.upsertHiddenFreeProfile(winnerProfile)',
+              '                statusText = "بهترین سرور با پینگ $bestMs میلی‌ثانیه انتخاب و فعال شد!"',
+              '                platform.toast("سریع‌ترین سرور رایگان ($bestMs ms) انتخاب شد")',
+              '                onConnectSmart()',
+              '            }.onFailure { e ->',
+              '                statusText = e.message ?: "خطا در یافتن سرور رایگان؛ دوباره تلاش کنید"',
+              '                platform.toast(statusText)',
+              '            }',
+              '        }',
+              '    }',
+              '',
+              '    Column(',
+              '        modifier = modifier',
+              '            .fillMaxSize()',
+              '            .verticalScroll(rememberScrollState())',
+              '            .padding(contentPadding),',
+              '        horizontalAlignment = Alignment.CenterHorizontally,',
+              '    ) {',
+              '        Spacer(Modifier.height(8.dp))',
+              '        PageHeader(',
+              '            title = "کانفیگ رایگان هوشمند",',
+              '            subtitle = "اتصال خودکار به بهترین سرور در پس‌زمینه بدون شلوغی لیست سرورها",',
+              '        )',
+              '',
+              '        Spacer(Modifier.height(12.dp))',
+              '',
+              '        Surface(',
+              '            shape = RoundedCornerShape(28.dp),',
+              '            color = MaterialTheme.colorScheme.surfaceContainerHigh,',
+              '            modifier = Modifier',
+              '                .fillMaxWidth()',
+              '                .padding(horizontal = 20.dp)',
+              '                .tourTarget("free-card"),',
+              '        ) {',
+              '            Column(',
+              '                Modifier.fillMaxWidth().padding(24.dp),',
+              '                horizontalAlignment = Alignment.CenterHorizontally,',
+              '                verticalArrangement = Arrangement.spacedBy(14.dp),',
+              '            ) {',
+              '                MorphingBlob(',
+              '                    progress = if (isFreeConnected) 1f else if (scanning) 0.7f else 0.35f,',
+              '                    brush = if (isFreeConnected) ZedGradients.connected else ZedGradients.idle,',
+              '                    modifier = Modifier.size(116.dp),',
+              '                ) {',
+              '                    if (scanning) {',
+              '                        CircularProgressIndicator(',
+              '                            color = Color.White,',
+              '                            strokeWidth = 3.dp,',
+              '                            modifier = Modifier.size(44.dp),',
+              '                        )',
+              '                    } else {',
+              '                        Icon(',
+              '                            painterResource(if (isFreeConnected) Res.drawable.ic_check_circle else Res.drawable.ic_bolt),',
+              '                            contentDescription = null,',
+              '                            tint = Color.White,',
+              '                            modifier = Modifier.size(48.dp),',
+              '                        )',
+              '                    }',
+              '                }',
+              '',
+              '                Text(',
+              '                    text = when {',
+              '                        scanning -> "در حال جستجو و تست خودکار..."',
+              '                        isFreeConnected -> "متصل به سرور هوشمند رایگان"',
+              '                        else -> "اتصال هوشمند تک‌کلیکی"',
+              '                    },',
+              '                    style = MaterialTheme.typography.headlineSmall,',
+              '                    fontWeight = FontWeight.Bold,',
+              '                    color = MaterialTheme.colorScheme.onSurface,',
+              '                    textAlign = TextAlign.Center,',
+              '                )',
+              '',
+              '                Text(',
+              '                    text = statusText,',
+              '                    style = MaterialTheme.typography.bodyMedium,',
+              '                    color = MaterialTheme.colorScheme.onSurfaceVariant,',
+              '                    textAlign = TextAlign.Center,',
+              '                )',
+              '',
+              '                if (freeProfile?.lastPingMs != null && !scanning) {',
+              '                    Surface(',
+              '                        shape = CircleShape,',
+              '                        color = MaterialTheme.colorScheme.primaryContainer,',
+              '                    ) {',
+              '                        Text(',
+              '                            text = "پینگ سرور انتخاب‌شده: ${freeProfile.lastPingMs} ms",',
+              '                            style = MaterialTheme.typography.labelLarge,',
+              '                            fontWeight = FontWeight.SemiBold,',
+              '                            color = MaterialTheme.colorScheme.onPrimaryContainer,',
+              '                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),',
+              '                        )',
+              '                    }',
+              '                }',
+              '',
+              '                if (scanning) {',
+              '                    LinearProgressIndicator(',
+              '                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp).clip(CircleShape),',
+              '                    )',
+              '                }',
+              '',
+              '                Spacer(Modifier.height(4.dp))',
+              '',
+              '                Button(',
+              '                    onClick = { startSmartFreeConnect() },',
+              '                    enabled = !scanning,',
+              '                    shape = RoundedCornerShape(18.dp),',
+              '                    modifier = Modifier.fillMaxWidth().height(56.dp),',
+              '                ) {',
+              '                    Icon(',
+              '                        painterResource(if (isFreeConnected) Res.drawable.ic_sync else Res.drawable.ic_bolt),',
+              '                        contentDescription = null,',
+              '                        modifier = Modifier.size(22.dp),',
+              '                    )',
+              '                    Spacer(Modifier.width(10.dp))',
+              '                    Text(',
+              '                        text = when {',
+              '                            scanning -> "لطفاً چند ثانیه صبر کنید..."',
+              '                            isFreeConnected -> "تعویض هوشمند به سرور رایگان جدید"',
+              '                            else -> "یافتن بهترین سرور و اتصال خودکار"',
+              '                        },',
+              '                        style = MaterialTheme.typography.titleMedium,',
+              '                        fontWeight = FontWeight.Bold,',
+              '                    )',
+              '                }',
+              '',
+              '                if (isFreeConnected) {',
+              '                    FilledTonalButton(',
+              '                        onClick = onDisconnect,',
+              '                        shape = RoundedCornerShape(18.dp),',
+              '                        modifier = Modifier.fillMaxWidth().height(50.dp),',
+              '                    ) {',
+              '                        Text("قطع اتصال", fontWeight = FontWeight.SemiBold)',
+              '                    }',
+              '                }',
+              '            }',
+              '        }',
+              '',
+              '        Spacer(Modifier.height(14.dp))',
+              '',
+              '        Surface(',
+              '            shape = RoundedCornerShape(22.dp),',
+              '            color = MaterialTheme.colorScheme.surfaceContainer,',
+              '            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),',
+              '        ) {',
+              '            Column(',
+              '                Modifier.padding(18.dp),',
+              '                verticalArrangement = Arrangement.spacedBy(8.dp),',
+              '            ) {',
+              '                Row(verticalAlignment = Alignment.CenterVertically) {',
+              '                    Icon(',
+              '                        painterResource(Res.drawable.ic_info),',
+              '                        contentDescription = null,',
+              '                        tint = MaterialTheme.colorScheme.primary,',
+              '                        modifier = Modifier.size(20.dp),',
+              '                    )',
+              '                    Spacer(Modifier.width(8.dp))',
+              '                    Text(',
+              '                        "سیستم اتصال هوشمند چگونه کار می‌کند؟",',
+              '                        style = MaterialTheme.typography.titleMedium,',
+              '                        fontWeight = FontWeight.Bold,',
+              '                    )',
+              '                }',
+              '                Text(',
+              '                    "• بدون شلوغ شدن برنامه: کانفیگ‌های رایگان به صورت مخفی در پس‌زمینه بررسی می‌شوند و لیست سرورهای شخصی شما کاملاً تمیز باقی می‌ماند.\\n" +',
+              '                        "• تست سرعت و پینگ واقعی: برنامه به صورت خودکار ده‌ها سرور جدید را تست کرده و کم‌تأخیرترین گزینه را متصل می‌کند.\\n" +',
+              '                        "• آپدیت مداوم: منبع سرورها به صورت مستمر بروزرسانی می‌شود؛ هر زمان سرعت کاهش یافت، کافیست یک‌بار دکمه تعویض هوشمند را بزنید.",',
+              '                    style = MaterialTheme.typography.bodyMedium,',
+              '                    color = MaterialTheme.colorScheme.onSurfaceVariant,',
+              '                )',
+              '            }',
+              '        }',
+              '',
+              '        Spacer(Modifier.height(14.dp))',
+              '',
+              '        Surface(',
+              '            onClick = onGoToShop,',
+              '            shape = RoundedCornerShape(22.dp),',
+              '            color = MaterialTheme.colorScheme.primaryContainer,',
+              '            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),',
+              '        ) {',
+              '            Row(',
+              '                Modifier.fillMaxWidth().padding(18.dp),',
+              '                verticalAlignment = Alignment.CenterVertically,',
+              '            ) {',
+              '                Icon(',
+              '                    painterResource(Res.drawable.ic_star),',
+              '                    contentDescription = null,',
+              '                    tint = MaterialTheme.colorScheme.onPrimaryContainer,',
+              '                    modifier = Modifier.size(28.dp),',
+              '                )',
+              '                Spacer(Modifier.width(14.dp))',
+              '                Column(Modifier.weight(1f)) {',
+              '                    Text(',
+              '                        "سرعت بالاتر و پینگ ثابت می‌خواهید؟",',
+              '                        style = MaterialTheme.typography.titleMedium,',
+              '                        fontWeight = FontWeight.Bold,',
+              '                        color = MaterialTheme.colorScheme.onPrimaryContainer,',
+              '                    )',
+              '                    Text(',
+              '                        "مشاهده اشتراک‌های اختصاصی VIP (هر گیگ فقط ۶,۰۰۰ تومان)",',
+              '                        style = MaterialTheme.typography.bodySmall,',
+              '                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f),',
+              '                    )',
+              '                }',
+              '                Icon(',
+              '                    painterResource(Res.drawable.ic_chevron_right),',
+              '                    contentDescription = null,',
+              '                    tint = MaterialTheme.colorScheme.onPrimaryContainer,',
+              '                )',
+              '            }',
+              '        }',
+              '',
+              '        Spacer(Modifier.height(28.dp))',
+              '    }',
+              '}',
+              '',
+              'private data class VipPlan(',
+              '    val title: String,',
+              '    val traffic: String,',
+              '    val price: String,',
+              '    val badge: String,',
+              '    val description: String,',
+              '    val highlighted: Boolean = false,',
+              ')',
+              '',
+              'private val VIP_PLANS = listOf(',
+              '    VipPlan(',
+              '        title = "بسته اقتصادی",',
+              '        traffic = "۲۰ گیگابایت",',
+              '        price = "۱۲۰,۰۰۰ تومان",',
+              '        badge = "مناسب مصرف روزانه",',
+              '        description = "مناسب تلگرام، اینستاگرام و وب‌گردی با سرعت بالا • تمام اپراتورها",',
+              '    ),',
+              '    VipPlan(',
+              '        title = "بسته محبوب ویژه",',
+              '        traffic = "۵۰ گیگابایت",',
+              '        price = "۳۰۰,۰۰۰ تومان",',
+              '        badge = "پرفروش‌ترین",',
+              '        description = "مناسب یوتیوب، استریم، دانلود و استفاده مداوم بدون افت سرعت • آی‌پی ثابت",',
+              '        highlighted = true,',
+              '    ),',
+              '    VipPlan(',
+              '        title = "بسته حرفه‌ای و گیمینگ",',
+              '        traffic = "۱۰۰ گیگابایت",',
+              '        price = "۶۰۰,۰۰۰ تومان",',
+              '        badge = "پینگ فوق‌العاده پایین",',
+              '        description = "مناسب گیمرها، تریدرها، دانلود سنگین و استفاده چندکاربره با بالاترین پایداری",',
+              '    ),',
+              '    VipPlan(',
+              '        title = "بسته با حجم دلخواه شما",',
+              '        traffic = "حجم سفارشی",',
+              '        price = "گیگی ۶,۰۰۰ تومان",',
+              '        badge = "انعطاف‌پذیر",',
+              '        description = "انتخاب دقیق میزان ترافیک به دلخواه شما با تحویل آنی در تلگرام",',
+              '    ),',
+              ')',
+              '',
+              '@Composable',
+              'fun VaultScreen(',
+              '    repository: ConfigRepository,',
+              '    contentPadding: PaddingValues,',
+              '    onImportRequested: () -> Unit,',
+              '    modifier: Modifier = Modifier,',
+              ') {',
+              '    val platform = LocalPlatform.current',
+              '    val telegramUrl = "https://t.me/A_Mourdini_N"',
+              '',
+              '    Column(',
+              '        modifier = modifier',
+              '            .fillMaxSize()',
+              '            .verticalScroll(rememberScrollState())',
+              '            .padding(contentPadding),',
+              '    ) {',
+              '        Spacer(Modifier.height(8.dp))',
+              '        PageHeader(',
+              '            title = "فروشگاه اشتراک اختصاصی AMN",',
+              '            subtitle = "سرورهای پرسرعت، آی‌پی ثابت و بدون قطعی با تعرفه هر گیگ ۶,۰۰۰ تومان",',
+              '        )',
+              '',
+              '        Spacer(Modifier.height(8.dp))',
+              '',
+              '        Surface(',
+              '            shape = RoundedCornerShape(26.dp),',
+              '            color = MaterialTheme.colorScheme.primaryContainer,',
+              '            modifier = Modifier',
+              '                .fillMaxWidth()',
+              '                .padding(horizontal = 20.dp)',
+              '                .tourTarget("shop-card"),',
+              '        ) {',
+              '            Column(',
+              '                Modifier.fillMaxWidth().padding(20.dp),',
+              '                horizontalAlignment = Alignment.CenterHorizontally,',
+              '                verticalArrangement = Arrangement.spacedBy(10.dp),',
+              '            ) {',
+              '                MorphingBlob(',
+              '                    progress = 0.65f,',
+              '                    brush = ZedGradients.connected,',
+              '                    modifier = Modifier.size(84.dp),',
+              '                ) {',
+              '                    Icon(',
+              '                        painterResource(Res.drawable.ic_star),',
+              '                        contentDescription = null,',
+              '                        tint = Color.White,',
+              '                        modifier = Modifier.size(38.dp),',
+              '                    )',
+              '                }',
+              '                Text(',
+              '                    "تعرفه ویژه: هر گیگابایت فقط ۶,۰۰۰ تومان",',
+              '                    style = MaterialTheme.typography.titleLarge,',
+              '                    fontWeight = FontWeight.Black,',
+              '                    color = MaterialTheme.colorScheme.onPrimaryContainer,',
+              '                    textAlign = TextAlign.Center,',
+              '                )',
+              '                Text(',
+              '                    "• اتصال آنی روی همراه اول، ایرانسل، رایتل و مخابرات\\n" +',
+              '                        "• آی‌پی ثابت و تمیز (مناسب ترید، هوش مصنوعی و گیم)\\n" +',
+              '                        "• پشتیبانی ۲۴ ساعته و ضمانت کیفیت تا آخرین گیگ",',
+              '                    style = MaterialTheme.typography.bodyMedium,',
+              '                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.9f),',
+              '                )',
+              '                Spacer(Modifier.height(4.dp))',
+              '                Button(',
+              '                    onClick = { platform.openUri(telegramUrl) },',
+              '                    shape = RoundedCornerShape(16.dp),',
+              '                    modifier = Modifier.fillMaxWidth().height(52.dp),',
+              '                ) {',
+              '                    Icon(painterResource(Res.drawable.ic_add_link), contentDescription = null, modifier = Modifier.size(20.dp))',
+              '                    Spacer(Modifier.width(8.dp))',
+              '                    Text("خرید اشتراک و پیام در تلگرام", fontWeight = FontWeight.Bold)',
+              '                }',
+              '            }',
+              '        }',
+              '',
+              '        Spacer(Modifier.height(16.dp))',
+              '',
+              '        Text(',
+              '            "پکیج‌های پیشنهادی (تحویل آنی)",',
+              '            style = MaterialTheme.typography.titleMedium,',
+              '            fontWeight = FontWeight.Bold,',
+              '            color = MaterialTheme.colorScheme.primary,',
+              '            modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp),',
+              '        )',
+              '',
+              '        Column(',
+              '            Modifier.fillMaxWidth().padding(horizontal = 20.dp),',
+              '            verticalArrangement = Arrangement.spacedBy(10.dp),',
+              '        ) {',
+              '            VIP_PLANS.forEach { plan ->',
+              '                Surface(',
+              '                    onClick = { platform.openUri(telegramUrl) },',
+              '                    shape = RoundedCornerShape(22.dp),',
+              '                    color = if (plan.highlighted) MaterialTheme.colorScheme.secondaryContainer',
+              '                    else MaterialTheme.colorScheme.surfaceContainerHigh,',
+              '                    modifier = Modifier',
+              '                        .fillMaxWidth()',
+              '                        .then(',
+              '                            if (plan.highlighted) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(22.dp))',
+              '                            else Modifier,',
+              '                        ),',
+              '                ) {',
+              '                    Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {',
+              '                        Row(',
+              '                            Modifier.fillMaxWidth(),',
+              '                            horizontalArrangement = Arrangement.SpaceBetween,',
+              '                            verticalAlignment = Alignment.CenterVertically,',
+              '                        ) {',
+              '                            Column {',
+              '                                Text(',
+              '                                    plan.title,',
+              '                                    style = MaterialTheme.typography.titleMedium,',
+              '                                    fontWeight = FontWeight.Bold,',
+              '                                    color = MaterialTheme.colorScheme.onSurface,',
+              '                                )',
+              '                                Text(',
+              '                                    plan.traffic,',
+              '                                    style = MaterialTheme.typography.headlineSmall,',
+              '                                    fontWeight = FontWeight.Black,',
+              '                                    color = MaterialTheme.colorScheme.primary,',
+              '                                )',
+              '                            }',
+              '                            Column(horizontalAlignment = Alignment.End) {',
+              '                                Surface(',
+              '                                    shape = CircleShape,',
+              '                                    color = MaterialTheme.colorScheme.primary,',
+              '                                ) {',
+              '                                    Text(',
+              '                                        plan.badge,',
+              '                                        style = MaterialTheme.typography.labelSmall,',
+              '                                        fontWeight = FontWeight.Bold,',
+              '                                        color = MaterialTheme.colorScheme.onPrimary,',
+              '                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),',
+              '                                    )',
+              '                                }',
+              '                                Spacer(Modifier.height(6.dp))',
+              '                                Text(',
+              '                                    plan.price,',
+              '                                    style = MaterialTheme.typography.titleMedium,',
+              '                                    fontWeight = FontWeight.Bold,',
+              '                                    color = MaterialTheme.colorScheme.onSurface,',
+              '                                )',
+              '                            }',
+              '                        }',
+              '                        Text(',
+              '                            plan.description,',
+              '                            style = MaterialTheme.typography.bodySmall,',
+              '                            color = MaterialTheme.colorScheme.onSurfaceVariant,',
+              '                        )',
+              '                        Row(',
+              '                            Modifier.fillMaxWidth(),',
+              '                            horizontalArrangement = Arrangement.End,',
+              '                            verticalAlignment = Alignment.CenterVertically,',
+              '                        ) {',
+              '                            Text(',
+              '                                "سفارش در تلگرام (@A_Mourdini_N)",',
+              '                                style = MaterialTheme.typography.labelLarge,',
+              '                                fontWeight = FontWeight.Bold,',
+              '                                color = MaterialTheme.colorScheme.primary,',
+              '                            )',
+              '                            Spacer(Modifier.width(4.dp))',
+              '                            Icon(',
+              '                                painterResource(Res.drawable.ic_chevron_right),',
+              '                                contentDescription = null,',
+              '                                tint = MaterialTheme.colorScheme.primary,',
+              '                                modifier = Modifier.size(18.dp),',
+              '                            )',
+              '                        }',
+              '                    }',
+              '                }',
+              '            }',
+              '        }',
+              '',
+              '        Spacer(Modifier.height(28.dp))',
+              '    }',
+              '}',
+          ]))
+
+          # 5) Update MainScaffold.kt to route TopDestination.Free and TopDestination.Vault + TourDestinations
+          p_main = KT + "/MainScaffold.kt"
+          t_main = read(p_main)
+          t_main = t_main.replace(
+              "import dev.cluvex.zedsecure.ui.vault.VaultScreen",
+              "import dev.cluvex.zedsecure.ui.vault.VaultScreen\nimport dev.cluvex.zedsecure.ui.vault.FreeConnectScreen",
+              1
+          )
+          old_browse = "current = if (activeProfile?.isLocked == true) TopDestination.Vault\n                        else TopDestination.Servers"
+          new_browse = 'current = if (activeProfile?.id == "amn_free_smart") TopDestination.Free else TopDestination.Servers'
+          if old_browse not in t_main:
+              fail("old_browse not found in MainScaffold.kt")
+          t_main = t_main.replace(old_browse, new_browse, 1)
+
+          old_vault_branch = "\n".join([
+              "                TopDestination.Vault -> VaultScreen(",
+              "                    repository = configRepository,",
+              "                    contentPadding = innerPadding,",
+              "                    onImportRequested = onImportZsx,",
+              "                )",
+          ])
+          new_free_and_vault_branch = "\n".join([
+              "                TopDestination.Free -> FreeConnectScreen(",
+              "                    repository = configRepository,",
+              "                    contentPadding = innerPadding,",
+              "                    onConnectSmart = {",
+              "                        if ( dev.cluvex.zedsecure.core.VpnManager.status.value.state.isActive ) {",
+              "                            onActiveServerChanged()",
+              "                        } else {",
+              "                            onToggleConnection()",
+              "                        }",
+              "                    },",
+              "                    onDisconnect = onToggleConnection,",
+              "                    onGoToShop = { current = TopDestination.Vault },",
+              "                )",
+              "                TopDestination.Vault -> VaultScreen(",
+              "                    repository = configRepository,",
+              "                    contentPadding = innerPadding,",
+              "                    onImportRequested = onImportZsx,",
+              "                )",
+          ])
+          if old_vault_branch not in t_main:
+              fail("TopDestination.Vault branch not found in MainScaffold.kt")
+          t_main = t_main.replace(old_vault_branch, new_free_and_vault_branch, 1)
+
+          old_tour_map = "\n".join([
+              "                dev.cluvex.zedsecure.ui.onboarding.TourDestination.Home -> TopDestination.Home",
+              "                dev.cluvex.zedsecure.ui.onboarding.TourDestination.Servers -> TopDestination.Servers",
+              "                dev.cluvex.zedsecure.ui.onboarding.TourDestination.Settings -> TopDestination.Settings",
+          ])
+          new_tour_map = "\n".join([
+              "                dev.cluvex.zedsecure.ui.onboarding.TourDestination.Home -> TopDestination.Home",
+              "                dev.cluvex.zedsecure.ui.onboarding.TourDestination.Servers -> TopDestination.Servers",
+              "                dev.cluvex.zedsecure.ui.onboarding.TourDestination.Free -> TopDestination.Free",
+              "                dev.cluvex.zedsecure.ui.onboarding.TourDestination.Shop -> TopDestination.Vault",
+              "                dev.cluvex.zedsecure.ui.onboarding.TourDestination.Settings -> TopDestination.Settings",
+          ])
+          if old_tour_map not in t_main:
+              fail("tour destination map not found in MainScaffold.kt")
+          t_main = t_main.replace(old_tour_map, new_tour_map, 1)
+          write(p_main, t_main)
+
+          # 6) Update Tour.kt and TourSteps.kt to include Free Configs & VIP Store steps
+          p_tour = KT + "/onboarding/Tour.kt"
+          t_tour = read(p_tour)
+          if "enum class TourDestination { Home, Servers, Settings }" not in t_tour:
+              fail("TourDestination enum not found in Tour.kt")
+          t_tour = t_tour.replace(
+              "enum class TourDestination { Home, Servers, Settings }",
+              "enum class TourDestination { Home, Servers, Free, Shop, Settings }",
+              1
+          )
+          write(p_tour, t_tour)
+
+          p_steps = KT + "/onboarding/TourSteps.kt"
+          t_steps = read(p_steps)
+          # Remove removed SETTINGS_SUPPORT step and add Free & Shop steps right before NAV_SETTINGS
+          pat_sup = re.compile(
+              r'\n[ ]*TourStep\(\n[ ]*target = TourTargets\.SETTINGS_SUPPORT,\n.*?\n[ ]*\),\n', re.S)
+          t_steps, c = pat_sup.subn('\n', t_steps, count=1)
+          if c != 1:
+              fail("tour support step not found")
+
+          nav_settings_step = "    TourStep(\n        target = TourTargets.NAV_SETTINGS,"
+          free_and_shop_steps = "\n".join([
+              '    TourStep(',
+              '        target = "nav-Free",',
+              '        title = "بخش کانفیگ رایگان هوشمند",',
+              '        body = "از این تب وارد بخش اتصال رایگان شوید؛ نیازی به گشتن میان صدها کانفیگ نیست!",',
+              '        destination = TourDestination.Servers,',
+              '    ),',
+              '    TourStep(',
+              '        target = "free-card",',
+              '        title = "اتصال خودکار در پس‌زمینه",',
+              '        body = "با زدن این دکمه، برنامه در چند ثانیه تمام سرورهای رایگان را در پس‌زمینه تست کرده و به سریع‌ترین سرور متصل می‌شود.",',
+              '        destination = TourDestination.Free,',
+              '    ),',
+              '    TourStep(',
+              '        target = "nav-Vault",',
+              '        title = "فروشگاه اشتراک اختصاصی VIP",',
+              '        body = "برای تهیه سرورهای پرسرعت، آی‌پی ثابت و بدون محدودیت وارد بخش فروشگاه شوید.",',
+              '        destination = TourDestination.Free,',
+              '    ),',
+              '    TourStep(',
+              '        target = "shop-card",',
+              '        title = "خرید اشتراک (گیگی ۶,۰۰۰ تومان)",',
+              '        body = "در این بخش می‌توانید بسته‌های اختصاصی AMN را با تعرفه هر گیگ ۶,۰۰۰ تومان انتخاب کرده و مستقیماً در تلگرام سفارش دهید.",',
+              '        destination = TourDestination.Shop,',
+              '    ),',
+              '    TourStep(',
+              '        target = TourTargets.NAV_SETTINGS,',
+          ])
+          if nav_settings_step not in t_steps:
+              fail("NAV_SETTINGS step not found in TourSteps.kt")
+          write(p_steps, t_steps.replace(nav_settings_step, free_and_shop_steps, 1))
+
+          # 7) SettingsScreen.kt (About section, Z->A, Defaults, Update Checker)
           p = KT + "/settings/SettingsScreen.kt"
           t = read(p)
-
-          # 2a) remove the "Support the project" banner group
           pat = re.compile(
               r'\n[ ]*SettingsGroup\(modifier = Modifier\.tourTargetInPage\(TourTargets\.SETTINGS_SUPPORT\)\) \{\n'
               r'[ ]*SettingsBannerRow\(\n.*?\) \{ onOpen\(SettingsPage\.Support\) \}\n'
@@ -193,7 +1004,6 @@ jobs:
           if c != 1:
               fail("support banner block not found")
 
-          # 2b) About group: keep Check for Updates row + Created By Ali Mourdini + Support rows (without AboutSheet popup)
           start = t.index('stringResource(Res.string.settings_about),\n            modifier = Modifier.tourTargetInPage(TourTargets.SETTINGS_ABOUT),')
           gstart = t.index('{', start)
           body_start = t.index('val fromPlay', gstart)
@@ -228,44 +1038,28 @@ jobs:
           t = t[:body_start] + new_rows + t[ver_end:]
           write(p, t)
 
-          # 2c) Change "Z" to "A" in AppDesignPicker.kt (Old design preview card)
+          # 8) Change "Z" to "A" across AppDesignPicker, Onboarding, HomeScreen, AppearancePickers, and Vector Glyphs
           p_design = KT + "/settings/AppDesignPicker.kt"
           t_design = read(p_design)
           old_z_design = 'Text("Z", color = Color.White, style = MaterialTheme.typography.titleLargeEmphasized)'
-          if old_z_design not in t_design:
-              fail("Z text not found in AppDesignPicker.kt")
           write(p_design, t_design.replace(old_z_design, 'Text("A", color = Color.White, style = MaterialTheme.typography.titleLargeEmphasized)', 1))
 
-          # 2d) Change "Z" to "A" in Onboarding.kt (Tour offer step card)
           p_onb = KT + "/onboarding/Onboarding.kt"
           t_onb = read(p_onb)
           old_z_onb = '            Text(\n                "Z",\n                style = MaterialTheme.typography.displayLargeEmphasized,'
           new_a_onb = '            Text(\n                "A",\n                style = MaterialTheme.typography.displayLargeEmphasized,'
-          if old_z_onb not in t_onb:
-              fail("Z text not found in Onboarding.kt")
           write(p_onb, t_onb.replace(old_z_onb, new_a_onb, 1))
 
-          # 2e) Change "Z" to "A" on HomeScreen.kt (Old design main connect button) and AppearancePickers.kt (Hero style preview)
           p_home = KT + "/home/HomeScreen.kt"
           t_home = read(p_home)
-          old_z_home = '                else -> Text(\n                    text = "Z",'
-          new_a_home = '                else -> Text(\n                    text = "A",'
-          if old_z_home not in t_home:
-              fail("Z text not found in HomeScreen.kt")
-          write(p_home, t_home.replace(old_z_home, new_a_home, 1))
+          write(p_home, t_home.replace('                else -> Text(\n                    text = "Z",', '                else -> Text(\n                    text = "A",', 1))
 
           p_pickers = KT + "/settings/AppearancePickers.kt"
           t_pickers = read(p_pickers)
-          old_z_pickers = ') { Text("Z", color = on, fontSize = 18.sp, fontWeight = FontWeight.Bold) }'
-          new_a_pickers = ') { Text("A", color = on, fontSize = 18.sp, fontWeight = FontWeight.Bold) }'
-          if old_z_pickers not in t_pickers:
-              fail("Z text not found in AppearancePickers.kt")
-          write(p_pickers, t_pickers.replace(old_z_pickers, new_a_pickers, 1))
+          write(p_pickers, t_pickers.replace(') { Text("Z", color = on, fontSize = 18.sp, fontWeight = FontWeight.Bold) }', ') { Text("A", color = on, fontSize = 18.sp, fontWeight = FontWeight.Bold) }', 1))
 
-          # 2f) Replace Z vector glyph with A in ic_zed_glyph.xml and ic_zed_mark.xml (used in PortalHome, etc.)
           a_path_512 = "M256,86 L432,426 L342,426 L306,350 L206,350 L170,426 L80,426 Z M228,284 L284,284 L256,218 Z"
-          p_glyph = "shared/src/commonMain/composeResources/drawable/ic_zed_glyph.xml"
-          write(p_glyph, "\n".join([
+          write("shared/src/commonMain/composeResources/drawable/ic_zed_glyph.xml", "\n".join([
               '<vector xmlns:android="http://schemas.android.com/apk/res/android"',
               '    android:width="24dp"',
               '    android:height="24dp"',
@@ -274,8 +1068,7 @@ jobs:
               f'    <path android:fillColor="#FFFFFFFF" android:pathData="{a_path_512}" />',
               '</vector>',
           ]))
-          p_mark = "shared/src/commonMain/composeResources/drawable/ic_zed_mark.xml"
-          write(p_mark, "\n".join([
+          write("shared/src/commonMain/composeResources/drawable/ic_zed_mark.xml", "\n".join([
               '<vector xmlns:android="http://schemas.android.com/apk/res/android"',
               '    android:width="512dp"',
               '    android:height="512dp"',
@@ -286,7 +1079,7 @@ jobs:
               '</vector>',
           ]))
 
-          # 2g) Add "AMN Cyber" signature preset to ThemeProfiles.kt
+          # 9) Add "AMN Cyber" signature preset to ThemeProfiles.kt
           p_themes = KT + "/theme/ThemeProfiles.kt"
           t_themes = read(p_themes)
           amn_profile = "\n".join([
@@ -309,11 +1102,9 @@ jobs:
               '        configCardText = 0xFFECFEFF,',
               '    ),',
           ])
-          if 'val ThemeProfiles: List<ThemeProfile> = listOf(' not in t_themes:
-              fail("ThemeProfiles list not found")
           write(p_themes, t_themes.replace('val ThemeProfiles: List<ThemeProfile> = listOf(', amn_profile, 1))
 
-          # 2h) Enable auto-update subscriptions (every 1h), auto-test, and auto-sort by default
+          # 10) Enable auto-update subscriptions (every 1h), auto-test, and auto-sort by default
           p_settings_model = "shared/src/commonMain/kotlin/dev/cluvex/zedsecure/domain/model/AppSettings.kt"
           t_model = read(p_settings_model)
           old_sub_defaults = "\n".join([
@@ -330,8 +1121,6 @@ jobs:
               '    val autoRemoveInvalidAfterTest: Boolean = false,',
               '    val autoSortAfterTest: Boolean = true,',
           ])
-          if old_sub_defaults not in t_model:
-              fail("subscription defaults block not found in AppSettings.kt")
           write(p_settings_model, t_model.replace(old_sub_defaults, new_sub_defaults, 1))
 
           p_repo = "app/src/main/java/dev/cluvex/zedsecure/data/settings/SettingsRepository.kt"
@@ -349,11 +1138,9 @@ jobs:
               '                .apply()',
               '        }',
           ])
-          if old_repo_init not in t_repo:
-              fail("SettingsRepository init line not found")
           write(p_repo, t_repo.replace(old_repo_init, new_repo_init, 1))
 
-          # 2i) Connect GitHub Auto-Update Checker & Main Screen Popup to AMN Releases
+          # 11) Connect GitHub Auto-Update Checker & Main Screen Popup to AMN Releases
           p_upd = "shared/src/commonMain/kotlin/dev/cluvex/zedsecure/data/update/UpdateChecker.kt"
           t_upd = read(p_upd)
           old_apk_lookup = "\n".join([
@@ -369,8 +1156,6 @@ jobs:
               '            }?.value',
               '        } ?: assets.entries.firstOrNull { (name, _) -> name.endsWith(".apk", ignoreCase = true) }?.value',
           ])
-          if old_apk_lookup not in t_upd:
-              fail("apk lookup not found in UpdateChecker.kt")
           t_upd = t_upd.replace(old_apk_lookup, new_apk_lookup, 1)
 
           old_notes = "\n".join([
@@ -386,10 +1171,7 @@ jobs:
               '            markdown.substringBefore("\\n<sub>")',
               '        }',
           ])
-          if old_notes not in t_upd:
-              fail("releaseNotesFrom block not found in UpdateChecker.kt")
           t_upd = t_upd.replace(old_notes, new_notes, 1)
-
           t_upd = t_upd.replace(
               "const val UPDATE_CHECK_INTERVAL_MS = 12L * 60 * 60 * 1000",
               "const val UPDATE_CHECK_INTERVAL_MS = 15L * 60 * 1000",
@@ -439,51 +1221,11 @@ jobs:
               '        ) ?: return@LaunchedEffect',
               '        onUpdateSettings { it.copy(lastUpdateCheckMs = now) }',
           ])
-          if old_nudge not in t_nudge:
-              fail("LaunchedEffect block not found in NudgeHost.kt")
           write(p_nudge, t_nudge.replace(old_nudge, new_nudge, 1))
 
-          # 3) Drop the tour step that pointed at the removed banner
-          p = KT + "/onboarding/TourSteps.kt"
-          t = read(p)
-          pat = re.compile(
-              r'\n[ ]*TourStep\(\n[ ]*target = TourTargets\.SETTINGS_SUPPORT,\n.*?\n[ ]*\),\n', re.S)
-          t, c = pat.subn('\n', t, count=1)
-          if c != 1:
-              fail("tour support step not found")
-          write(p, t)
-          print("AMN UI patch applied OK")
-          PYEOF
-
-      - name: 5c. Remove Vault tab and finish AMN branding
-        run: |
-          python3 - << 'PYEOF'
-          from pathlib import Path
-          import sys
-
-          def patch(path, old, new, label, count=1):
-              p = Path(path)
-              if not p.exists():
-                  raise SystemExit(f"AMN patch failed: missing {path}")
-              text = p.read_text(encoding="utf-8")
-              actual = text.count(old)
-              if actual < count:
-                  raise SystemExit(f"AMN patch failed: {label} (expected at least {count}, found {actual})")
-              p.write_text(text.replace(old, new, count), encoding="utf-8")
-
-          nav = "shared/src/commonMain/kotlin/dev/cluvex/zedsecure/ui/navigation/NavBar.kt"
-          patch(nav, "TopDestination.entries.forEach { dest ->",
-                "TopDestination.entries.filter { it != TopDestination.Vault }.forEach { dest ->",
-                "hide Vault from navigation", count=4)
-
-          main = "shared/src/commonMain/kotlin/dev/cluvex/zedsecure/ui/MainScaffold.kt"
-          patch(main, "onImported = { current = TopDestination.Vault }",
-                "onImported = { current = TopDestination.Servers }", "route imported configs to Servers")
-          patch(main, "current = if (activeProfile?.isLocked == true) TopDestination.Vault\n                        else TopDestination.Servers",
-                "current = TopDestination.Servers", "remove hidden Vault browse route")
-
+          # 12) SettingsHero Z mark -> AMN & notification icon
           hero = "shared/src/commonMain/kotlin/dev/cluvex/zedsecure/ui/settings/SettingsHero.kt"
-          old = "\n".join([
+          old_hero = "\n".join([
               "        Icon(",
               "            painterResource(Res.drawable.ic_zed_glyph),",
               "            contentDescription = null,",
@@ -491,7 +1233,7 @@ jobs:
               "            modifier = Modifier.size(58.dp),",
               "        )",
           ])
-          new = "\n".join([
+          new_hero = "\n".join([
               "        Text(",
               '            text = "AMN",',
               "            color = cs.onPrimary,",
@@ -500,11 +1242,9 @@ jobs:
               "            maxLines = 1,",
               "        )",
           ])
-          patch(hero, old, new, "replace Settings Z mark with AMN")
+          write(hero, read(hero).replace(old_hero, new_hero, 1))
 
           icon = Path("app/src/main/res/drawable/ic_tile_zed.xml")
-          if not icon.exists():
-              raise SystemExit("AMN patch failed: notification icon file missing")
           icon.write_text("\n".join([
               '<vector xmlns:android="http://schemas.android.com/apk/res/android"',
               '    android:width="24dp" android:height="24dp"',
@@ -514,14 +1254,7 @@ jobs:
               '</vector>',
           ]), encoding="utf-8")
 
-          for base in (Path("shared/src/commonMain/composeResources"), Path("app/src/main/res")):
-              for p in base.glob("values*/strings.xml"):
-                  text = p.read_text(encoding="utf-8")
-                  import re
-                  updated = re.sub(r'>([^<]*?)ZedSecure([^<]*?)<', lambda m: '>' + m.group(1) + 'AMN' + m.group(2) + '<', text, flags=re.IGNORECASE)
-                  if updated != text:
-                      p.write_text(updated, encoding="utf-8")
-          print("AMN branding and Vault navigation patch applied")
+          print("All AMN Free Connect, VIP Store, and Tour patches applied OK!")
           PYEOF
 
       - name: 6. Generate AMN Logo with Exact Standard Dimensions
@@ -582,7 +1315,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MY_REPO: ${{ github.repository }}
-          APP_VER: ${{ inputs.app_version || '3.1.6' }}
+          APP_VER: ${{ inputs.app_version || '3.1.7' }}
         run: |
           if ! gh release download amn-keystore-vault -p "amn-release.jks" --repo "$MY_REPO" 2>/dev/null; then
             echo "Generating permanent AMN Keystore for the first time..."
@@ -626,12 +1359,12 @@ jobs:
       - name: 9. Publish APKs to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: AMN-v${{ inputs.app_version || '3.1.6' }}
-          name: "AMN Security v${{ inputs.app_version || '3.1.6' }}"
+          tag_name: AMN-v${{ inputs.app_version || '3.1.7' }}
+          name: "AMN Security v${{ inputs.app_version || '3.1.7' }}"
           make_latest: true
           body: |
             ### What's new
-            ${{ inputs.release_notes || '• بهبود سرعت و پایداری اتصال و بهینه‌سازی رابط کاربری اختصاصی AMN' }}
+            ${{ inputs.release_notes || '• افزودن بخش اتصال هوشمند رایگان (انتخاب خودکار بهترین سرور در پس‌زمینه)\n• افزودن فروشگاه اشتراک اختصاصی VIP (هر گیگ ۶,۰۰۰ تومان)\n• بروزرسانی راهنمای تعاملی برنامه' }}
 
             ---
             - **پشتیبانی تلگرام:** [@A_Mourdini_N](https://t.me/A_Mourdini_N)
